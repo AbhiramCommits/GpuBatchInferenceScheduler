@@ -24,6 +24,16 @@ test_scheduler
 # Runtime artifacts
 scheduler_metrics.csv
 *.pcm
+results/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+_skbuild/
+build-*/
 
 # CUDA / nvcc artifacts
 *.cubin

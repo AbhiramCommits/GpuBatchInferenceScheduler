@@ -45,9 +45,27 @@ target_link_libraries(bench_gemm PRIVATE gemm_tiled gemm_cublas CUDA::cudart)
 add_executable(scheduler_daemon src/main.cpp)
 target_link_libraries(scheduler_daemon PRIVATE gbis_sched)
 
+# Python bindings
+option(GBIS_BUILD_PYTHON_BINDINGS "Build the pybind11 module gpuinfer" ON)
+if(GBIS_BUILD_PYTHON_BINDINGS)
+  find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+  include(FetchContent)
+  FetchContent_Declare(
+    pybind11
+    GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    GIT_TAG v2.13.6
+  )
+  FetchContent_MakeAvailable(pybind11)
+
+  pybind11_add_module(gpuinfer src/bindings/py_module.cpp)
+  target_link_libraries(gpuinfer PRIVATE gbis_sched)
+  install(TARGETS gpuinfer LIBRARY DESTINATION .)
+endif()
+
 # Tests
 include(CTest)
-if(BUILD_TESTING)
+option(GBIS_BUILD_TESTS "Build the C++ unit tests" ${BUILD_TESTING})
+if(GBIS_BUILD_TESTS)
   include(FetchContent)
   FetchContent_Declare(
     googletest

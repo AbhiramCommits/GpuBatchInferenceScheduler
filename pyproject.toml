@@ -1,0 +1,28 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "gpuinfer"
+version = "0.1.0"
+description = "Python bindings for the GPU batch inference scheduler (batched GEMM + scheduler)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.optional-dependencies]
+bench = ["numpy", "matplotlib"]
+test = ["pytest", "numpy"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.args = [
+  "-DGBIS_BUILD_PYTHON_BINDINGS=ON",
+  "-DGBIS_BUILD_TESTS=OFF",
+  "-DCMAKE_BUILD_TYPE=Release",
+]
+wheel.packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["python"]

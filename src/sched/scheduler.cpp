@@ -296,7 +296,7 @@ void BatchScheduler::dispatcher_loop() {
     {
       std::unique_lock<std::mutex> lk(queue_mutex_);
       queue_cv_.wait(lk, [this] { return shutdown_ || !queue_.empty(); });
-      if (shutdown_ && queue_.empty()) break;
+      if (shutdown_) break;  // drop queued work; in-flight batches complete
       while (!queue_.empty()) {
         candidates.push_back(queue_.top());
         queue_.pop();

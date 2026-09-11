@@ -158,6 +158,25 @@ TEST(SchedulerTest, EmptyQueueShutdownDoesNotDeadlock) {
   SUCCEED();
 }
 
+TEST(SchedulerTest, ShutdownWithPendingJobsDoesNotDeadlock) {
+  // Budget too small to pack anything: jobs stay queued while the dispatcher
+  // keeps polling. stop() must still shut everything down.
+  BatchScheduler::Options opts;
+  opts.num_workers = 2;
+  opts.fixed_budget_bytes = 1;  // nothing fits
+  BatchScheduler sched(opts);
+  sched.start();
+  for (std::uint64_t i = 1; i <= 4; ++i) {
+    auto j = make_job(i, 64, 64, 64, 1, 0);
+    sched.submit(j);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  sched.stop();  // must return; regression test for dispatcher shutdown
+  EXPECT_EQ(sched.submitted(), 4u);
+  EXPECT_EQ(sched.completed(), 0u);
+  SUCCEED();
+}
+
 TEST(SchedulerTest, GpuResultsMatchCpuReference) {
   int ndev = 0;
   if (cudaGetDeviceCount(&ndev) != cudaSuccess || ndev == 0) {

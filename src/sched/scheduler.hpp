@@ -82,6 +82,9 @@ class BatchScheduler {
   void dump_metrics_csv(const std::string& path) const;
   void print_summary() const;
 
+  double wall_seconds() const { return wall_seconds_; }
+  double mean_gpu_utilization() const { return monitor_.mean_utilization(); }
+
  private:
   void dispatcher_loop();
   void worker_loop();

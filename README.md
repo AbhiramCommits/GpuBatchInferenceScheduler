@@ -22,8 +22,11 @@ src/sched/job.hpp            InferenceJob (id, m, n, k, batch, priority, bytes_r
 src/sched/scheduler.hpp/.cpp BatchScheduler: priority queue, packing, worker pool
 src/sched/gpu_monitor.hpp/.cpp GPU telemetry via NVML (cudaMemGetInfo fallback)
 src/main.cpp                 scheduler daemon entrypoint
+src/bindings/py_module.cpp   pybind11 module `gpuinfer`
 bench/bench_gemm.cpp         CLI benchmark harness
 tests/test_scheduler.cpp     GoogleTest unit tests
+python/benchmark.py          NumPy vs gpuinfer benchmark
+python/test_bindings.py      pytest suite for the bindings
 ```
 
 ## Scheduler
@@ -68,6 +71,41 @@ cmake --build build -j
 
 # replay a job list from CSV (columns: id,m,n,k,batch,priority)
 ./build/scheduler_daemon --replay jobs.csv --workers 4 --max-batch 16
+```
+
+## Python bindings
+
+Install the `gpuinfer` extension (compiled via scikit-build-core, needs a
+CUDA toolchain):
+
+```sh
+pip install -e .
+```
+
+API:
+
+```python
+import numpy as np
+import gpuinfer
+
+# batched GEMM C[b] = A[b] @ B[b], float32; C-contiguous inputs are zero-copy
+a = np.random.randn(4, 512, 512).astype(np.float32)
+b = np.random.randn(4, 512, 512).astype(np.float32)
+c = gpuinfer.batched_gemm(a, b)
+
+# scheduler
+job_id = gpuinfer.submit_job(m=512, n=512, k=512, batch=4, priority=1)
+sched = gpuinfer.Scheduler(max_batch=8, workers=2, impl="tiled")
+sched.start()
+stats = sched.stats()   # submitted/completed/queued/failed, p50/p95/p99, ...
+sched.stop()
+```
+
+Benchmark and tests (GPU tests skip automatically without a CUDA device):
+
+```sh
+python python/benchmark.py            # -> results/benchmark.csv, results/speedup.png
+pytest python/test_bindings.py
 ```
 
 ## Test
