@@ -1,0 +1,32 @@
+# Build directories
+/build/
+build/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+
+# Compiled objects / binaries
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+bench_gemm
+
+# CUDA / nvcc artifacts
+*.cubin
+*.ptx
+*.fatbin
+*.o.d
+
+# IDE / editor
+.vscode/
+.idea/
+.DS_Store
+*.swp
