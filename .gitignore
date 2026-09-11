@@ -18,6 +18,12 @@ Makefile
 *.dylib
 *.exe
 bench_gemm
+scheduler_daemon
+test_scheduler
+
+# Runtime artifacts
+scheduler_metrics.csv
+*.pcm
 
 # CUDA / nvcc artifacts
 *.cubin

@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "core/cuda_check.hpp"
+#include "kernels/gemm_cublas.hpp"
 
 namespace gbis {
 

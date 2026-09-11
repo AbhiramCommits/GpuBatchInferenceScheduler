@@ -2,6 +2,8 @@
 
 #include <cstddef>
 
+#include "kernels/gemm.hpp"
+
 namespace gbis {
 
 namespace {

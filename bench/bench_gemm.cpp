@@ -15,17 +15,8 @@
 
 #include "core/cuda_check.hpp"
 #include "core/device_buffer.hpp"
-
-namespace gbis {
-
-void gemm_naive_batched(const float* A, const float* B, float* C, int M, int N,
-                        int K, int batch, cudaStream_t stream);
-void gemm_tiled_batched(const float* A, const float* B, float* C, int M, int N,
-                        int K, int batch, cudaStream_t stream);
-void gemm_cublas_batched(const float* A, const float* B, float* C, int M,
-                         int N, int K, int batch, cudaStream_t stream);
-
-}  // namespace gbis
+#include "kernels/gemm.hpp"
+#include "kernels/gemm_cublas.hpp"
 
 namespace {
 
