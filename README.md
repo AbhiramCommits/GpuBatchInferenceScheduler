@@ -22,11 +22,13 @@ src/sched/job.hpp            InferenceJob (id, m, n, k, batch, priority, bytes_r
 src/sched/scheduler.hpp/.cpp BatchScheduler: priority queue, packing, worker pool
 src/sched/gpu_monitor.hpp/.cpp GPU telemetry via NVML (cudaMemGetInfo fallback)
 src/main.cpp                 scheduler daemon entrypoint
+src/server/http_server.*     /healthz + Prometheus /metrics (cpp-httplib)
 src/bindings/py_module.cpp   pybind11 module `gpuinfer`
 bench/bench_gemm.cpp         CLI benchmark harness
 tests/test_scheduler.cpp     GoogleTest unit tests
 python/benchmark.py          NumPy vs gpuinfer benchmark
 python/test_bindings.py      pytest suite for the bindings
+deploy/                      Dockerfile, k8s manifests, Slurm scripts
 ```
 
 ## Scheduler
@@ -115,6 +117,16 @@ ctest --test-dir build --output-on-failure
 ```
 
 GPU-only tests skip cleanly when no CUDA device is present.
+
+## Deployment
+
+Docker image, Kubernetes manifests, and Slurm scripts that run the identical
+benchmark workload three ways (bare binary, container, cluster) live in
+`deploy/` — see `deploy/README.md`, `deploy/k8s/README.md`, and
+`deploy/slurm/`. The daemon serves `GET /healthz` and Prometheus-format
+`GET /metrics` (queue depth, in-flight jobs, p95 latency, GPU utilization) on
+`--http-port` (default 8080); `--jobs 0` runs until SIGINT, `--force-cpu`
+runs without a GPU.
 
 Options: `--m --n --k --batch --iters --impl {naive,tiled,cublas,cpu}`.
 

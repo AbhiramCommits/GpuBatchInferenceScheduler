@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+# The kernel archives are linked into the shared Python module; nvcc emits
+# non-PIC code by default, which breaks that link.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 set(CMAKE_CUDA_ARCHITECTURES 70 80 89)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -34,7 +38,7 @@ target_link_libraries(gbis_sched PUBLIC
   gemm_cublas
   CUDA::cudart
   CUDA::cublas
-  CUDA::nvml
+  ${CMAKE_DL_LIBS}
 )
 
 # Benchmarks and daemon
@@ -42,8 +46,23 @@ add_executable(bench_gemm bench/bench_gemm.cpp)
 target_include_directories(bench_gemm PRIVATE src)
 target_link_libraries(bench_gemm PRIVATE gemm_tiled gemm_cublas CUDA::cudart)
 
+# HTTP status server for the daemon (cpp-httplib, header-only)
+include(FetchContent)
+FetchContent_Declare(
+  cpp-httplib
+  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG v0.18.7
+)
+FetchContent_MakeAvailable(cpp-httplib)
+
+add_library(gbis_http STATIC src/server/http_server.cpp)
+target_include_directories(gbis_http PUBLIC src)
+target_link_libraries(gbis_http PUBLIC gbis_sched httplib::httplib)
+
 add_executable(scheduler_daemon src/main.cpp)
-target_link_libraries(scheduler_daemon PRIVATE gbis_sched)
+target_link_libraries(scheduler_daemon PRIVATE gbis_http gbis_sched)
+
+install(TARGETS bench_gemm scheduler_daemon RUNTIME DESTINATION bin)
 
 # Python bindings
 option(GBIS_BUILD_PYTHON_BINDINGS "Build the pybind11 module gpuinfer" ON)

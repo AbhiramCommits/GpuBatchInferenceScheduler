@@ -1,0 +1,17 @@
+.git
+.gitignore
+build
+build-*
+results
+scheduler_metrics.csv
+*.csv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+_skbuild
+dist
+docs
+deploy
+.python-version
+.venv

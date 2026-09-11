@@ -14,6 +14,7 @@
 #include "sched/gpu_monitor.hpp"
 #include "sched/job.hpp"
 #include "sched/scheduler.hpp"
+#include "server/http_server.hpp"
 
 namespace {
 
@@ -22,7 +23,7 @@ std::atomic<bool> g_interrupted{false};
 extern "C" void on_sigint(int) { g_interrupted.store(true); }
 
 struct Config {
-  std::uint64_t jobs = 0;
+  std::uint64_t jobs = 0;  // 0 + no --replay => serve until SIGINT
   double arrival_rate = 0.0;  // jobs/sec, poisson (0 => submit all at once)
   std::string replay_csv;
   int max_batch = 8;
@@ -34,6 +35,8 @@ struct Config {
   int max_size = 1024;
   int max_job_batch = 8;
   int priority_levels = 4;
+  int http_port = 8080;  // 0 disables the status server
+  bool force_cpu = false;
   bool help = false;
 };
 
@@ -52,6 +55,8 @@ void print_usage(std::ostream& os) {
      << "  --min-size <N>      min m/n/k for synthetic jobs (default 64)\n"
      << "  --max-size <N>      max m/n/k for synthetic jobs (default 1024)\n"
      << "  --job-batch-max <N> max internal batch per job (default 8)\n"
+     << "  --http-port <N>    status server port, 0 disables (default 8080)\n"
+     << "  --force-cpu        run without a GPU (jobs are dropped)\n"
      << "  --help              show this message\n";
 }
 
@@ -134,6 +139,10 @@ Config parse_args(int argc, char** argv) {
       cfg.max_size = parse_int("--max-size", option_value(argc, argv, i, "--max-size"));
     } else if (arg == "--job-batch-max" || arg.rfind("--job-batch-max=", 0) == 0) {
       cfg.max_job_batch = parse_int("--job-batch-max", option_value(argc, argv, i, "--job-batch-max"));
+    } else if (arg == "--http-port" || arg.rfind("--http-port=", 0) == 0) {
+      cfg.http_port = parse_int("--http-port", option_value(argc, argv, i, "--http-port"));
+    } else if (arg == "--force-cpu") {
+      cfg.force_cpu = true;
     } else {
       throw std::runtime_error("unknown argument: " + arg);
     }
@@ -144,14 +153,14 @@ Config parse_args(int argc, char** argv) {
     throw std::runtime_error("--impl must be tiled|cublas");
   }
   if (cfg.arrival_rate < 0.0) throw std::runtime_error("--arrival-rate must be >= 0");
+  if (cfg.http_port < 0 || cfg.http_port > 65535) {
+    throw std::runtime_error("--http-port must be in [0, 65535]");
+  }
   if (cfg.min_size <= 0 || cfg.max_size < cfg.min_size) {
     throw std::runtime_error("invalid --min-size/--max-size");
   }
   if (cfg.jobs > 0 && !cfg.replay_csv.empty()) {
     throw std::runtime_error("use either --jobs or --replay, not both");
-  }
-  if (cfg.jobs == 0 && cfg.replay_csv.empty()) {
-    throw std::runtime_error("specify --jobs <N> or --replay <csv>");
   }
   return cfg;
 }
@@ -209,8 +218,9 @@ int main(int argc, char** argv) {
     }
 
     gbis::GpuMonitor monitor;
-    if (!monitor.gpu_present()) {
-      std::cerr << "error: no CUDA GPU detected\n";
+    if (!monitor.gpu_present() && !cfg.force_cpu) {
+      std::cerr << "error: no CUDA GPU detected (use --force-cpu to run "
+                   "without one)\n";
       return EXIT_FAILURE;
     }
 
@@ -228,6 +238,14 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, on_sigint);
     sched.start();
+
+    gbis::HttpStatusServer http(sched, cfg.http_port);
+    if (cfg.http_port > 0 && !http.start()) {
+      std::cerr << "error: failed to bind HTTP status server to port "
+                << cfg.http_port << "\n";
+      sched.stop();
+      return EXIT_FAILURE;
+    }
 
     std::thread generator;
     if (cfg.replay_csv.empty()) {
@@ -258,6 +276,7 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (generator.joinable()) generator.join();
+    http.stop();
     sched.stop(cfg.metrics_csv);
     return EXIT_SUCCESS;
   } catch (const std::exception& e) {

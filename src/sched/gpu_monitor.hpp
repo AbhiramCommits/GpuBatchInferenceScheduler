@@ -3,10 +3,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <thread>
-
-#include <nvml.h>
 
 namespace gbis {
 
@@ -18,9 +17,10 @@ struct GpuStats {
 };
 
 // GPU telemetry via NVML (nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates).
-// Falls back to cudaMemGetInfo for memory when NVML is unavailable; utilization
-// is then reported as 0. Optionally runs a background sampling thread that
-// accumulates the mean utilization over the run.
+// NVML is loaded at runtime with dlopen so the process still starts on hosts
+// without the NVIDIA driver; the monitor then falls back to cudaMemGetInfo
+// for memory (utilization reported as 0). Optionally runs a background
+// sampling thread accumulating the mean utilization over the run.
 class GpuMonitor {
  public:
   GpuMonitor();
@@ -39,8 +39,8 @@ class GpuMonitor {
   double mean_utilization() const;
 
  private:
-  nvmlDevice_t device_ = nullptr;
-  bool nvml_initialized_ = false;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
   bool nvml_available_ = false;
   bool gpu_present_ = false;
 

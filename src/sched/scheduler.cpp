@@ -303,6 +303,13 @@ void BatchScheduler::dispatcher_loop() {
       }
     }
 
+    if (gpu_absent_) {
+      // No GPU: jobs can never execute; fail them so the daemon keeps
+      // draining (e.g. --force-cpu on a GPU-less host or kind/minikube).
+      fail_batch(candidates, "no gpu");
+      continue;
+    }
+
     std::vector<InferenceJob> selected;
     std::vector<InferenceJob> remaining;
     pack_jobs(candidates, budget_bytes(), opts_.max_batch, selected, remaining);

@@ -3,15 +3,69 @@
 #include <chrono>
 
 #include <cuda_runtime.h>
+#include <dlfcn.h>
 
 namespace gbis {
 
-GpuMonitor::GpuMonitor() {
-  if (nvmlInit() == NVML_SUCCESS) {
-    nvml_initialized_ = true;
-    nvmlDevice_t dev = nullptr;
-    if (nvmlDeviceGetHandleByIndex(0, &dev) == NVML_SUCCESS) {
-      device_ = dev;
+namespace {
+
+// Minimal ABI-compatible definitions of the NVML structs we use (kept out of
+// the header; NVML is resolved at runtime via dlopen).
+using NvmlDevice = struct NvmlDevice_st*;
+struct NvmlMemory {
+  unsigned long long total;
+  unsigned long long free;
+  unsigned long long used;
+};
+struct NvmlUtilization {
+  unsigned int gpu;
+  unsigned int memory;
+};
+
+}  // namespace
+
+struct GpuMonitor::Impl {
+  void* handle = nullptr;
+
+  int (*init)() = nullptr;
+  int (*shutdown)() = nullptr;
+  int (*device_get_handle_by_index)(unsigned int, NvmlDevice*) = nullptr;
+  int (*device_get_memory_info)(NvmlDevice, NvmlMemory*) = nullptr;
+  int (*device_get_utilization_rates)(NvmlDevice, NvmlUtilization*) = nullptr;
+
+  NvmlDevice device = nullptr;
+
+  ~Impl() {
+    if (handle != nullptr) {
+      if (shutdown != nullptr) shutdown();
+      dlclose(handle);
+    }
+  }
+};
+
+GpuMonitor::GpuMonitor() : impl_(std::make_unique<Impl>()) {
+  // NVML is a driver library: load it at runtime so the process still links
+  // and runs on hosts without the NVIDIA driver (e.g. kind/minikube).
+  impl_->handle = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (impl_->handle != nullptr) {
+    impl_->init = reinterpret_cast<int (*)()>(dlsym(impl_->handle, "nvmlInit"));
+    impl_->shutdown =
+        reinterpret_cast<int (*)()>(dlsym(impl_->handle, "nvmlShutdown"));
+    impl_->device_get_handle_by_index =
+        reinterpret_cast<int (*)(unsigned int, NvmlDevice*)>(
+            dlsym(impl_->handle, "nvmlDeviceGetHandleByIndex"));
+    impl_->device_get_memory_info =
+        reinterpret_cast<int (*)(NvmlDevice, NvmlMemory*)>(
+            dlsym(impl_->handle, "nvmlDeviceGetMemoryInfo"));
+    impl_->device_get_utilization_rates =
+        reinterpret_cast<int (*)(NvmlDevice, NvmlUtilization*)>(
+            dlsym(impl_->handle, "nvmlDeviceGetUtilizationRates"));
+    if (impl_->init != nullptr && impl_->shutdown != nullptr &&
+        impl_->device_get_handle_by_index != nullptr &&
+        impl_->device_get_memory_info != nullptr &&
+        impl_->device_get_utilization_rates != nullptr &&
+        impl_->init() == 0 &&
+        impl_->device_get_handle_by_index(0, &impl_->device) == 0) {
       nvml_available_ = true;
       gpu_present_ = true;
     }
@@ -27,21 +81,18 @@ GpuMonitor::GpuMonitor() {
   }
 }
 
-GpuMonitor::~GpuMonitor() {
-  stop_sampling();
-  if (nvml_initialized_) nvmlShutdown();
-}
+GpuMonitor::~GpuMonitor() { stop_sampling(); }
 
 GpuStats GpuMonitor::sample() const {
   GpuStats stats;
-  if (nvml_available_ && device_ != nullptr) {
-    nvmlMemory_t mem{};
-    if (nvmlDeviceGetMemoryInfo(device_, &mem) == NVML_SUCCESS) {
+  if (nvml_available_ && impl_->device != nullptr) {
+    NvmlMemory mem{};
+    if (impl_->device_get_memory_info(impl_->device, &mem) == 0) {
       stats.total_mem_bytes = static_cast<std::size_t>(mem.total);
       stats.free_mem_bytes = static_cast<std::size_t>(mem.free);
     }
-    nvmlUtilization_t util{};
-    if (nvmlDeviceGetUtilizationRates(device_, &util) == NVML_SUCCESS) {
+    NvmlUtilization util{};
+    if (impl_->device_get_utilization_rates(impl_->device, &util) == 0) {
       stats.utilization_pct = static_cast<unsigned>(util.gpu);
     }
     return stats;

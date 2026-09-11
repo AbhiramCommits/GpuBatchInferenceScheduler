@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-config
+  labels:
+    app: gpu-scheduler
+data:
+  JOBS: "1000000"
+  ARRIVAL_RATE: "20"
+  WORKERS: "2"
+  MAX_BATCH: "8"
+  IMPL: "tiled"
+  MARGIN_MB: "256"
+  HTTP_PORT: "8080"
