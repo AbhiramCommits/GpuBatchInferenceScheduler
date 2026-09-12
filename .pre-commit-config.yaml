@@ -1,0 +1,25 @@
+# See https://pre-commit.com for more information
+#   pre-commit install
+#   pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c, cuda]
+        exclude: ^build/
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^python/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^python/
+      - id: ruff-format
+        files: ^python/

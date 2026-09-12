@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Compile-only CUDA job (no GPU): installs the toolkit via apt (Jimver
+  # action), builds everything, checks formatting and runs clang-tidy, then
+  # runs the CPU-only GoogleTest subset and pytest -k "not gpu".
+  build-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Compile-only CUDA toolkit install (~2-3 min, no GPU required).
+      - uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: "12.4.0"
+          method: network
+          sub-packages: '["nvcc", "cudart-dev", "cublas-dev"]'
+          non-cuda-sub-packages: '["libc6-dev", "g++"]'
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+          python3 -m pip install "clang-format==18.1.8" "clang-tidy==18.1.8" numpy pytest
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-cuda12.4-${{ github.ref }}
+          restore-keys: |
+            ccache-${{ runner.os }}-cuda12.4-
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: clang-format check
+        run: |
+          find src bench tests -name '*.hpp' -o -name '*.cpp' -o -name '*.cu' |
+            sort | xargs clang-format --dry-run --Werror
+
+      - name: clang-tidy
+        # Informational: findings are reported in the logs but do not fail CI.
+        run: |
+          clang-tidy -p build \
+            -checks="-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters" \
+            src/sched/scheduler.cpp src/sched/gpu_monitor.cpp \
+            src/server/http_server.cpp src/main.cpp \
+            bench/bench_gemm.cpp src/bindings/py_module.cpp || true
+
+      - name: C++ tests (CPU-only subset)
+        run: |
+          ./build/test_scheduler \
+            --gtest_filter=-SchedulerTest.GpuResultsMatchCpuReference
+
+      - name: Python tests (non-GPU)
+        run: |
+          PYTHONPATH=build python3 -m pytest python/ -q -k "not gpu"
+
+      - name: ruff + black check
+        run: |
+          python3 -m pip install black ruff
+          black --check python/
+          ruff check python/
+
+  # Multi-stage image build with GHA layer cache; pushed to ghcr.io on main.
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository }}/scheduler:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  lint-k8s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary -ignore-missing-schemas \
+            -skip kustomization.yaml \
+            deploy/k8s/*.yaml
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh
+          shellcheck -s bash deploy/slurm/*.sh deploy/slurm/*.sbatch

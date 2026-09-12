@@ -3,14 +3,15 @@
 GPU-dependent tests are skipped when no CUDA device is present.
 """
 
+import gpuinfer
 import numpy as np
 import pytest
-
-import gpuinfer
 
 requires_gpu = pytest.mark.skipif(
     not gpuinfer.cuda_available(), reason="no CUDA GPU available"
 )
+
+gpu = pytest.mark.gpu
 
 rng = np.random.default_rng(7)
 
@@ -25,7 +26,8 @@ rng = np.random.default_rng(7)
     ],
 )
 @requires_gpu
-def test_batched_gemm_matches_numpy(shape):
+@gpu
+def test_gpu_batched_gemm_matches_numpy(shape):
     batch, m, n, k = shape
     a = rng.uniform(-1.0, 1.0, (batch, m, k)).astype(np.float32)
     b = rng.uniform(-1.0, 1.0, (batch, k, n)).astype(np.float32)
@@ -37,7 +39,8 @@ def test_batched_gemm_matches_numpy(shape):
 
 
 @requires_gpu
-def test_batched_gemm_handles_noncontiguous_input():
+@gpu
+def test_gpu_batched_gemm_noncontiguous_input():
     batch, m, n, k = 2, 64, 48, 32
     a = rng.uniform(-1.0, 1.0, (batch, m, k)).astype(np.float32)
     b = rng.uniform(-1.0, 1.0, (batch, k, n)).astype(np.float32)

@@ -1,0 +1,14 @@
+# Formatting config for the C++/CUDA sources. CI runs
+# `clang-format --dry-run --Werror` with clang-format 18.1.8 (see
+# .github/workflows/ci.yml); keep versions in sync.
+BasedOnStyle: Google
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Left
+SortIncludes: CaseSensitive
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: false
+BinPackParameters: false
+StatementMacros: [CUDA_CHECK, CUBLAS_CHECK]

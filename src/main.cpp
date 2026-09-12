@@ -20,10 +20,12 @@ namespace {
 
 std::atomic<bool> g_interrupted{false};
 
-extern "C" void on_sigint(int) { g_interrupted.store(true); }
+extern "C" void on_sigint(int) {
+  g_interrupted.store(true);
+}
 
 struct Config {
-  std::uint64_t jobs = 0;  // 0 + no --replay => serve until SIGINT
+  std::uint64_t jobs = 0;     // 0 + no --replay => serve until SIGINT
   double arrival_rate = 0.0;  // jobs/sec, poisson (0 => submit all at once)
   std::string replay_csv;
   int max_batch = 8;
@@ -105,8 +107,10 @@ double parse_double(const std::string& name, const std::string& value) {
 std::string option_value(int argc, char** argv, int& i, const std::string& name) {
   const std::string arg = argv[i];
   const std::string prefix = name + "=";
-  if (arg.compare(0, prefix.size(), prefix) == 0) return arg.substr(prefix.size());
-  if (i + 1 < argc) return argv[++i];
+  if (arg.compare(0, prefix.size(), prefix) == 0)
+    return arg.substr(prefix.size());
+  if (i + 1 < argc)
+    return argv[++i];
   throw std::runtime_error("missing value for " + name);
 }
 
@@ -138,7 +142,8 @@ Config parse_args(int argc, char** argv) {
     } else if (arg == "--max-size" || arg.rfind("--max-size=", 0) == 0) {
       cfg.max_size = parse_int("--max-size", option_value(argc, argv, i, "--max-size"));
     } else if (arg == "--job-batch-max" || arg.rfind("--job-batch-max=", 0) == 0) {
-      cfg.max_job_batch = parse_int("--job-batch-max", option_value(argc, argv, i, "--job-batch-max"));
+      cfg.max_job_batch =
+          parse_int("--job-batch-max", option_value(argc, argv, i, "--job-batch-max"));
     } else if (arg == "--http-port" || arg.rfind("--http-port=", 0) == 0) {
       cfg.http_port = parse_int("--http-port", option_value(argc, argv, i, "--http-port"));
     } else if (arg == "--force-cpu") {
@@ -147,12 +152,15 @@ Config parse_args(int argc, char** argv) {
       throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  if (cfg.max_batch <= 0) throw std::runtime_error("--max-batch must be positive");
-  if (cfg.workers <= 0) throw std::runtime_error("--workers must be positive");
+  if (cfg.max_batch <= 0)
+    throw std::runtime_error("--max-batch must be positive");
+  if (cfg.workers <= 0)
+    throw std::runtime_error("--workers must be positive");
   if (cfg.impl != "tiled" && cfg.impl != "cublas") {
     throw std::runtime_error("--impl must be tiled|cublas");
   }
-  if (cfg.arrival_rate < 0.0) throw std::runtime_error("--arrival-rate must be >= 0");
+  if (cfg.arrival_rate < 0.0)
+    throw std::runtime_error("--arrival-rate must be >= 0");
   if (cfg.http_port < 0 || cfg.http_port > 65535) {
     throw std::runtime_error("--http-port must be in [0, 65535]");
   }
@@ -165,8 +173,7 @@ Config parse_args(int argc, char** argv) {
   return cfg;
 }
 
-gbis::InferenceJob make_job(std::uint64_t id, const Config& cfg,
-                            std::mt19937& rng) {
+gbis::InferenceJob make_job(std::uint64_t id, const Config& cfg, std::mt19937& rng) {
   gbis::InferenceJob job;
   job.id = id;
   std::uniform_int_distribution<int> size(cfg.min_size, cfg.max_size);
@@ -188,13 +195,16 @@ bool parse_replay(const std::string& path, std::vector<gbis::InferenceJob>& out)
   }
   std::string line;
   while (std::getline(f, line)) {
-    if (line.empty() || line[0] == '#') continue;
+    if (line.empty() || line[0] == '#')
+      continue;
     std::stringstream ss(line);
     std::string tok[6];
     for (auto& t : tok) {
-      if (!std::getline(ss, t, ',')) return false;
+      if (!std::getline(ss, t, ','))
+        return false;
     }
-    if (tok[0] == "id") continue;  // header row
+    if (tok[0] == "id")
+      continue;  // header row
     gbis::InferenceJob job;
     job.id = parse_u64("replay id", tok[0]);
     job.m = parse_int("replay m", tok[1]);
@@ -241,8 +251,7 @@ int main(int argc, char** argv) {
 
     gbis::HttpStatusServer http(sched, cfg.http_port);
     if (cfg.http_port > 0 && !http.start()) {
-      std::cerr << "error: failed to bind HTTP status server to port "
-                << cfg.http_port << "\n";
+      std::cerr << "error: failed to bind HTTP status server to port " << cfg.http_port << "\n";
       sched.stop();
       return EXIT_FAILURE;
     }
@@ -256,26 +265,26 @@ int main(int argc, char** argv) {
         for (std::uint64_t i = 1; i <= cfg.jobs && !g_interrupted.load(); ++i) {
           sched.submit(make_job(i, cfg, rng));
           if (cfg.arrival_rate > 0.0) {
-            std::this_thread::sleep_for(
-                std::chrono::duration<double>(inter_arrival(rng)));
+            std::this_thread::sleep_for(std::chrono::duration<double>(inter_arrival(rng)));
           }
         }
       });
     } else {
       for (const auto& job : replay_jobs) {
-        if (g_interrupted.load()) break;
+        if (g_interrupted.load())
+          break;
         sched.submit(job);
       }
     }
 
     while (!g_interrupted.load()) {
-      if (sched.submitted() > 0 && sched.queued() == 0 &&
-          sched.completed() >= sched.submitted()) {
+      if (sched.submitted() > 0 && sched.queued() == 0 && sched.completed() >= sched.submitted()) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (generator.joinable()) generator.join();
+    if (generator.joinable())
+      generator.join();
     http.stop();
     sched.stop(cfg.metrics_csv);
     return EXIT_SUCCESS;

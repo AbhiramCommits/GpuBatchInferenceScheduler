@@ -29,6 +29,9 @@ tests/test_scheduler.cpp     GoogleTest unit tests
 python/benchmark.py          NumPy vs gpuinfer benchmark
 python/test_bindings.py      pytest suite for the bindings
 deploy/                      Dockerfile, k8s manifests, Slurm scripts
+scripts/profile.sh           nsys + ncu profiling runner
+scripts/parse_nsys.py        nsys sqlite -> Markdown breakdown
+docs/PROFILING.md            profiling write-up and next optimization
 ```
 
 ## Scheduler
@@ -117,6 +120,27 @@ ctest --test-dir build --output-on-failure
 ```
 
 GPU-only tests skip cleanly when no CUDA device is present.
+
+## Profiling
+
+Requires a CUDA GPU with `nsys` / `ncu` on PATH:
+
+```sh
+scripts/profile.sh            # -> results/nsys_report.sqlite, ncu_tiled.ncu-rep
+python3 scripts/parse_nsys.py results/nsys_report.sqlite
+```
+
+The transfer-vs-compute breakdown, pinned-memory/stream-overlap numbers, ncu
+occupancy and memory throughput, and the identified bottleneck are written up
+in `docs/PROFILING.md`.
+
+## CI and code style
+
+`.github/workflows/ci.yml` runs: a compile-only CUDA job (apt toolkit, build,
+`clang-format --dry-run --Werror`, clang-tidy, CPU-only GoogleTest subset,
+`pytest -k "not gpu"`, black + ruff), a buildx Docker build pushed to ghcr.io
+on main, and kubeconform + shellcheck for the deploy manifests. See
+`.pre-commit-config.yaml` (clang-format, black, ruff) for the local hooks.
 
 ## Deployment
 

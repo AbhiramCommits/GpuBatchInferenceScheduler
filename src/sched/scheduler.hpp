@@ -25,7 +25,8 @@ struct WorkerContext;
 // greedy sweep maximizes the number of packed jobs. Returns true if anything
 // was selected.
 bool pack_jobs(const std::vector<InferenceJob>& candidates,
-               std::size_t budget_bytes, int max_batch,
+               std::size_t budget_bytes,
+               int max_batch,
                std::vector<InferenceJob>& selected,
                std::vector<InferenceJob>& remaining);
 
@@ -42,13 +43,13 @@ void fill_matrices(const InferenceJob& job, float* a, float* b);
 class BatchScheduler {
  public:
   struct Options {
-    int max_batch = 8;                              // jobs per packed batch
+    int max_batch = 8;                               // jobs per packed batch
     std::size_t safety_margin_bytes = 256ull << 20;  // 256 MiB
-    int num_workers = 2;                            // threads (and streams)
-    std::string impl = "tiled";                     // "tiled" | "cublas"
-    bool retain_results = false;                    // keep C matrices
-    std::size_t fixed_budget_bytes = 0;             // 0 => use GPU monitor
-    int util_sample_ms = 100;                       // NVML sampling interval
+    int num_workers = 2;                             // threads (and streams)
+    std::string impl = "tiled";                      // "tiled" | "cublas"
+    bool retain_results = false;                     // keep C matrices
+    std::size_t fixed_budget_bytes = 0;              // 0 => use GPU monitor
+    int util_sample_ms = 100;                        // NVML sampling interval
   };
 
   explicit BatchScheduler(const Options& opts);
@@ -63,8 +64,12 @@ class BatchScheduler {
   // Thread-safe. Returns the seq number identifying the submission.
   std::uint64_t submit(InferenceJob job);
 
-  std::uint64_t submitted() const { return submitted_.load(); }
-  std::uint64_t completed() const { return completed_.load(); }
+  std::uint64_t submitted() const {
+    return submitted_.load();
+  }
+  std::uint64_t completed() const {
+    return completed_.load();
+  }
   std::size_t queued() const;
 
   struct JobMetrics {
@@ -82,8 +87,12 @@ class BatchScheduler {
   void dump_metrics_csv(const std::string& path) const;
   void print_summary() const;
 
-  double wall_seconds() const { return wall_seconds_; }
-  double mean_gpu_utilization() const { return monitor_.mean_utilization(); }
+  double wall_seconds() const {
+    return wall_seconds_;
+  }
+  double mean_gpu_utilization() const {
+    return monitor_.mean_utilization();
+  }
 
  private:
   void dispatcher_loop();
@@ -95,8 +104,7 @@ class BatchScheduler {
   Options opts_;
   GpuMonitor monitor_;
 
-  std::priority_queue<InferenceJob, std::vector<InferenceJob>, JobPriorityCompare>
-      queue_;
+  std::priority_queue<InferenceJob, std::vector<InferenceJob>, JobPriorityCompare> queue_;
   mutable std::mutex queue_mutex_;
   std::condition_variable queue_cv_;
   std::uint64_t next_seq_ = 0;

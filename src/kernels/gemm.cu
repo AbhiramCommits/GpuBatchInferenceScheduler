@@ -12,13 +12,16 @@ namespace {
 // inner product. Row-major, float32. C[b] = A[b] * B[b].
 __global__ void gemm_naive_batched_kernel(const float* __restrict__ A,
                                           const float* __restrict__ B,
-                                          float* __restrict__ C, int M, int N,
+                                          float* __restrict__ C,
+                                          int M,
+                                          int N,
                                           int K) {
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int batch = blockIdx.z;
 
-  if (row >= M || col >= N) return;
+  if (row >= M || col >= N)
+    return;
 
   const std::size_t stride_a = static_cast<std::size_t>(M) * K;
   const std::size_t stride_b = static_cast<std::size_t>(K) * N;
@@ -39,7 +42,9 @@ __global__ void gemm_naive_batched_kernel(const float* __restrict__ A,
 template <int BLOCK_M, int BLOCK_N, int BLOCK_K>
 __global__ void gemm_tiled_batched_kernel(const float* __restrict__ A,
                                           const float* __restrict__ B,
-                                          float* __restrict__ C, int M, int N,
+                                          float* __restrict__ C,
+                                          int M,
+                                          int N,
                                           int K) {
   const int block_row = blockIdx.y;
   const int block_col = blockIdx.x;
@@ -89,20 +94,19 @@ __global__ void gemm_tiled_batched_kernel(const float* __restrict__ A,
 }  // namespace
 
 // C[b] = A[b] * B[b]; A is (M, K), B is (K, N), C is (M, N), all row-major.
-void gemm_naive_batched(const float* A, const float* B, float* C, int M, int N,
-                        int K, int batch, cudaStream_t stream) {
+void gemm_naive_batched(
+    const float* A, const float* B, float* C, int M, int N, int K, int batch, cudaStream_t stream) {
   dim3 block(16, 16);
   dim3 grid((N + 15) / 16, (M + 15) / 16, batch);
   gemm_naive_batched_kernel<<<grid, block, 0, stream>>>(A, B, C, M, N, K);
 }
 
-void gemm_tiled_batched(const float* A, const float* B, float* C, int M, int N,
-                        int K, int batch, cudaStream_t stream) {
+void gemm_tiled_batched(
+    const float* A, const float* B, float* C, int M, int N, int K, int batch, cudaStream_t stream) {
   constexpr int BLOCK = 32;
   dim3 block(BLOCK, BLOCK);
   dim3 grid((N + BLOCK - 1) / BLOCK, (M + BLOCK - 1) / BLOCK, batch);
-  gemm_tiled_batched_kernel<BLOCK, BLOCK, BLOCK>
-      <<<grid, block, 0, stream>>>(A, B, C, M, N, K);
+  gemm_tiled_batched_kernel<BLOCK, BLOCK, BLOCK><<<grid, block, 0, stream>>>(A, B, C, M, N, K);
 }
 
 }  // namespace gbis

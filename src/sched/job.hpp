@@ -34,7 +34,8 @@ struct InferenceJob {
 // within equal priority.
 struct JobPriorityCompare {
   bool operator()(const InferenceJob& a, const InferenceJob& b) const {
-    if (a.priority != b.priority) return a.priority < b.priority;
+    if (a.priority != b.priority)
+      return a.priority < b.priority;
     return a.seq > b.seq;
   }
 };

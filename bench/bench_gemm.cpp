@@ -32,8 +32,7 @@ struct Options {
   bool help = false;
 };
 
-using GemmFn = void (*)(const float*, const float*, float*, int, int, int, int,
-                        cudaStream_t);
+using GemmFn = void (*)(const float*, const float*, float*, int, int, int, int, cudaStream_t);
 
 void print_usage(std::ostream& os) {
   os << "Usage: bench_gemm [options]\n"
@@ -66,8 +65,10 @@ int parse_int(const std::string& name, const std::string& value) {
 std::string option_value(int argc, char** argv, int& i, const std::string& name) {
   const std::string arg = argv[i];
   const std::string prefix = name + "=";
-  if (arg.compare(0, prefix.size(), prefix) == 0) return arg.substr(prefix.size());
-  if (i + 1 < argc) return argv[++i];
+  if (arg.compare(0, prefix.size(), prefix) == 0)
+    return arg.substr(prefix.size());
+  if (i + 1 < argc)
+    return argv[++i];
   throw std::runtime_error("missing value for " + name);
 }
 
@@ -96,17 +97,17 @@ Options parse_args(int argc, char** argv) {
   if (opt.m <= 0 || opt.n <= 0 || opt.k <= 0) {
     throw std::runtime_error("--m, --n and --k must be positive");
   }
-  if (opt.batch <= 0) throw std::runtime_error("--batch must be positive");
-  if (opt.iters <= 0) throw std::runtime_error("--iters must be positive");
-  if (opt.impl != "naive" && opt.impl != "tiled" && opt.impl != "cublas" &&
-      opt.impl != "cpu") {
+  if (opt.batch <= 0)
+    throw std::runtime_error("--batch must be positive");
+  if (opt.iters <= 0)
+    throw std::runtime_error("--iters must be positive");
+  if (opt.impl != "naive" && opt.impl != "tiled" && opt.impl != "cublas" && opt.impl != "cpu") {
     throw std::runtime_error("--impl must be one of naive|tiled|cublas|cpu");
   }
   return opt;
 }
 
-void gemm_cpu_reference(const float* A, const float* B, float* C, int M, int N,
-                        int K, int batch) {
+void gemm_cpu_reference(const float* A, const float* B, float* C, int M, int N, int K, int batch) {
   for (int b = 0; b < batch; ++b) {
     const float* Ab = A + static_cast<std::size_t>(b) * M * K;
     const float* Bb = B + static_cast<std::size_t>(b) * K * N;
@@ -115,8 +116,7 @@ void gemm_cpu_reference(const float* A, const float* B, float* C, int M, int N,
       for (int n = 0; n < N; ++n) {
         double acc = 0.0;
         for (int k = 0; k < K; ++k) {
-          acc += static_cast<double>(Ab[m * K + k]) *
-                 static_cast<double>(Bb[k * N + n]);
+          acc += static_cast<double>(Ab[m * K + k]) * static_cast<double>(Bb[k * N + n]);
         }
         Cb[m * N + n] = static_cast<float>(acc);
       }
@@ -128,19 +128,24 @@ double max_abs_error(const std::vector<float>& a, const std::vector<float>& b) {
   double max_err = 0.0;
   const std::size_t n = std::min(a.size(), b.size());
   for (std::size_t i = 0; i < n; ++i) {
-    max_err = std::max(max_err,
-                       std::fabs(static_cast<double>(a[i]) - b[i]));
+    max_err = std::max(max_err, std::fabs(static_cast<double>(a[i]) - b[i]));
   }
   return max_err;
 }
 
 class CudaEvent {
  public:
-  CudaEvent() { CUDA_CHECK(cudaEventCreate(&event_)); }
-  ~CudaEvent() { cudaEventDestroy(event_); }
+  CudaEvent() {
+    CUDA_CHECK(cudaEventCreate(&event_));
+  }
+  ~CudaEvent() {
+    cudaEventDestroy(event_);
+  }
   CudaEvent(const CudaEvent&) = delete;
   CudaEvent& operator=(const CudaEvent&) = delete;
-  cudaEvent_t get() const { return event_; }
+  cudaEvent_t get() const {
+    return event_;
+  }
 
  private:
   cudaEvent_t event_ = nullptr;
@@ -153,9 +158,12 @@ float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
 }
 
 GemmFn select_impl(const std::string& impl) {
-  if (impl == "naive") return gbis::gemm_naive_batched;
-  if (impl == "tiled") return gbis::gemm_tiled_batched;
-  if (impl == "cublas") return gbis::gemm_cublas_batched;
+  if (impl == "naive")
+    return gbis::gemm_naive_batched;
+  if (impl == "tiled")
+    return gbis::gemm_tiled_batched;
+  if (impl == "cublas")
+    return gbis::gemm_cublas_batched;
   return nullptr;
 }
 
@@ -168,15 +176,15 @@ int run_benchmark(const Options& opt) {
 
   std::mt19937 rng(42);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-  for (float& v : h_a) v = dist(rng);
-  for (float& v : h_b) v = dist(rng);
+  for (float& v : h_a)
+    v = dist(rng);
+  for (float& v : h_b)
+    v = dist(rng);
 
   const auto cpu_start = std::chrono::steady_clock::now();
-  gemm_cpu_reference(h_a.data(), h_b.data(), h_ref.data(), opt.m, opt.n, opt.k,
-                     opt.batch);
+  gemm_cpu_reference(h_a.data(), h_b.data(), h_ref.data(), opt.m, opt.n, opt.k, opt.batch);
   const auto cpu_stop = std::chrono::steady_clock::now();
-  const double cpu_ms =
-      std::chrono::duration<double, std::milli>(cpu_stop - cpu_start).count();
+  const double cpu_ms = std::chrono::duration<double, std::milli>(cpu_stop - cpu_start).count();
 
   double h2d_ms = 0.0;
   double kernel_ms = 0.0;
@@ -199,23 +207,21 @@ int run_benchmark(const Options& opt) {
     const auto wall_start = std::chrono::steady_clock::now();
 
     CUDA_CHECK(cudaEventRecord(e_start.get(), stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_a.data(), h_a.data(), d_a.bytes(),
-                               cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_b.data(), h_b.data(), d_b.bytes(),
-                               cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(
+        cudaMemcpyAsync(d_a.data(), h_a.data(), d_a.bytes(), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(
+        cudaMemcpyAsync(d_b.data(), h_b.data(), d_b.bytes(), cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaEventRecord(e_h2d.get(), stream));
 
-    gemm(d_a.data(), d_b.data(), d_c.data(), opt.m, opt.n, opt.k, opt.batch,
-         stream);
+    gemm(d_a.data(), d_b.data(), d_c.data(), opt.m, opt.n, opt.k, opt.batch, stream);
     CUDA_CHECK(cudaEventRecord(e_k0.get(), stream));
     for (int i = 0; i < opt.iters; ++i) {
-      gemm(d_a.data(), d_b.data(), d_c.data(), opt.m, opt.n, opt.k, opt.batch,
-           stream);
+      gemm(d_a.data(), d_b.data(), d_c.data(), opt.m, opt.n, opt.k, opt.batch, stream);
     }
     CUDA_CHECK(cudaEventRecord(e_k1.get(), stream));
 
-    CUDA_CHECK(cudaMemcpyAsync(h_c.data(), d_c.data(), d_c.bytes(),
-                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(
+        cudaMemcpyAsync(h_c.data(), d_c.data(), d_c.bytes(), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaEventRecord(e_d2h.get(), stream));
     CUDA_CHECK(cudaDeviceSynchronize());
     const auto wall_stop = std::chrono::steady_clock::now();
@@ -223,14 +229,11 @@ int run_benchmark(const Options& opt) {
     h2d_ms = elapsed_ms(e_start.get(), e_h2d.get());
     kernel_ms = elapsed_ms(e_k0.get(), e_k1.get()) / opt.iters;
     d2h_ms = elapsed_ms(e_k1.get(), e_d2h.get());
-    total_ms =
-        std::chrono::duration<double, std::milli>(wall_stop - wall_start)
-            .count();
+    total_ms = std::chrono::duration<double, std::milli>(wall_stop - wall_start).count();
   }
 
   const double max_err = max_abs_error(h_c, h_ref);
-  const double flops =
-      2.0 * static_cast<double>(opt.m) * opt.n * opt.k * opt.batch;
+  const double flops = 2.0 * static_cast<double>(opt.m) * opt.n * opt.k * opt.batch;
   const double gflops = kernel_ms > 0.0 ? flops / kernel_ms / 1.0e6 : 0.0;
   const double cpu_gflops = cpu_ms > 0.0 ? flops / cpu_ms / 1.0e6 : 0.0;
   const double speedup = kernel_ms > 0.0 ? cpu_ms / kernel_ms : 0.0;
@@ -238,14 +241,12 @@ int run_benchmark(const Options& opt) {
   std::cout << std::fixed << std::setprecision(6);
   std::cout << "impl,m,n,k,batch,iters,h2d_ms,kernel_ms,d2h_ms,total_ms,"
                "gflops,cpu_gflops,speedup_vs_cpu,max_abs_err\n";
-  std::cout << opt.impl << ',' << opt.m << ',' << opt.n << ',' << opt.k << ','
-            << opt.batch << ',' << opt.iters << ',' << h2d_ms << ','
-            << kernel_ms << ',' << d2h_ms << ',' << total_ms << ',' << gflops
-            << ',' << cpu_gflops << ',' << speedup << ',' << max_err << '\n';
+  std::cout << opt.impl << ',' << opt.m << ',' << opt.n << ',' << opt.k << ',' << opt.batch << ','
+            << opt.iters << ',' << h2d_ms << ',' << kernel_ms << ',' << d2h_ms << ',' << total_ms
+            << ',' << gflops << ',' << cpu_gflops << ',' << speedup << ',' << max_err << '\n';
 
   if (max_err >= kTolerance) {
-    std::cerr << "error: max abs error " << max_err
-              << " >= tolerance " << kTolerance << "\n";
+    std::cerr << "error: max abs error " << max_err << " >= tolerance " << kTolerance << "\n";
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;

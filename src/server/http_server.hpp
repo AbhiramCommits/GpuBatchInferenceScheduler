@@ -24,7 +24,9 @@ class HttpStatusServer {
   bool start();
   void stop();
 
-  int port() const { return port_; }
+  int port() const {
+    return port_;
+  }
 
  private:
   struct Impl;

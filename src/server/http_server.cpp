@@ -1,5 +1,7 @@
 #include "server/http_server.hpp"
 
+#include <httplib.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -8,17 +10,15 @@
 #include <thread>
 #include <vector>
 
-#include <httplib.h>
-
 namespace gbis {
 
 namespace {
 
 double percentile(std::vector<double> v, double p) {
-  if (v.empty()) return 0.0;
+  if (v.empty())
+    return 0.0;
   std::sort(v.begin(), v.end());
-  const std::size_t rank =
-      static_cast<std::size_t>(std::ceil(p / 100.0 * v.size()));
+  const std::size_t rank = static_cast<std::size_t>(std::ceil(p / 100.0 * v.size()));
   return v[std::max<std::size_t>(1, rank) - 1];
 }
 
@@ -32,16 +32,16 @@ struct HttpStatusServer::Impl {
 HttpStatusServer::HttpStatusServer(const BatchScheduler& sched, int port)
     : impl_(std::make_unique<Impl>()), sched_(sched), port_(port) {}
 
-HttpStatusServer::~HttpStatusServer() { stop(); }
+HttpStatusServer::~HttpStatusServer() {
+  stop();
+}
 
 bool HttpStatusServer::start() {
-  impl_->server.Get("/healthz",
-                    [](const httplib::Request&, httplib::Response& res) {
-                      res.set_content("ok\n", "text/plain");
-                    });
+  impl_->server.Get("/healthz", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content("ok\n", "text/plain");
+  });
 
-  impl_->server.Get("/metrics", [this](const httplib::Request&,
-                                       httplib::Response& res) {
+  impl_->server.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
     const std::uint64_t submitted = sched_.submitted();
     const std::uint64_t completed = sched_.completed();
     const std::uint64_t queued = sched_.queued();
@@ -56,9 +56,8 @@ bool HttpStatusServer::start() {
         ++failed;
       }
     }
-    const std::uint64_t dispatched = submitted >= completed + queued
-                                         ? submitted - completed - queued
-                                         : 0;
+    const std::uint64_t dispatched =
+        submitted >= completed + queued ? submitted - completed - queued : 0;
 
     std::ostringstream os;
     os << "# HELP gbis_queue_depth Current number of queued jobs.\n"
@@ -85,7 +84,8 @@ bool HttpStatusServer::start() {
     res.set_content(os.str(), "text/plain; version=0.0.4");
   });
 
-  if (!impl_->server.bind_to_port("0.0.0.0", port_)) return false;
+  if (!impl_->server.bind_to_port("0.0.0.0", port_))
+    return false;
   impl_->thread = std::thread([this] { impl_->server.listen_after_bind(); });
   return true;
 }

@@ -26,3 +26,13 @@ wheel.packages = []
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+markers = [
+  "gpu: requires a CUDA GPU",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

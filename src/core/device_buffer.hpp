@@ -17,15 +17,18 @@ class DeviceBuffer {
  public:
   DeviceBuffer() = default;
 
-  explicit DeviceBuffer(std::size_t count) { allocate(count); }
+  explicit DeviceBuffer(std::size_t count) {
+    allocate(count);
+  }
 
-  ~DeviceBuffer() { release(); }
+  ~DeviceBuffer() {
+    release();
+  }
 
   DeviceBuffer(const DeviceBuffer&) = delete;
   DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
-  DeviceBuffer(DeviceBuffer&& other) noexcept
-      : data_(other.data_), count_(other.count_) {
+  DeviceBuffer(DeviceBuffer&& other) noexcept : data_(other.data_), count_(other.count_) {
     other.data_ = nullptr;
     other.count_ = 0;
   }
@@ -43,7 +46,8 @@ class DeviceBuffer {
 
   void allocate(std::size_t count) {
     release();
-    if (count == 0) return;
+    if (count == 0)
+      return;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&data_), count * sizeof(T)));
     count_ = count;
   }
@@ -56,11 +60,21 @@ class DeviceBuffer {
     count_ = 0;
   }
 
-  T* data() noexcept { return data_; }
-  const T* data() const noexcept { return data_; }
-  std::size_t size() const noexcept { return count_; }
-  std::size_t bytes() const noexcept { return count_ * sizeof(T); }
-  explicit operator bool() const noexcept { return data_ != nullptr; }
+  T* data() noexcept {
+    return data_;
+  }
+  const T* data() const noexcept {
+    return data_;
+  }
+  std::size_t size() const noexcept {
+    return count_;
+  }
+  std::size_t bytes() const noexcept {
+    return count_ * sizeof(T);
+  }
+  explicit operator bool() const noexcept {
+    return data_ != nullptr;
+  }
 
  private:
   T* data_ = nullptr;

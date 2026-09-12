@@ -31,8 +31,12 @@ class GpuMonitor {
 
   GpuStats sample() const;
 
-  bool gpu_present() const { return gpu_present_; }
-  bool nvml_available() const { return nvml_available_; }
+  bool gpu_present() const {
+    return gpu_present_;
+  }
+  bool nvml_available() const {
+    return nvml_available_;
+  }
 
   void start_sampling(int interval_ms = 100);
   void stop_sampling();

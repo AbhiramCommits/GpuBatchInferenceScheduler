@@ -1,3 +1,4 @@
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -10,8 +11,6 @@
 #include <thread>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include "sched/job.hpp"
 #include "sched/scheduler.hpp"
 
@@ -21,8 +20,7 @@ using gbis::BatchScheduler;
 using gbis::InferenceJob;
 using gbis::JobPriorityCompare;
 
-InferenceJob make_job(std::uint64_t id, int m, int n, int k, int batch,
-                      int priority) {
+InferenceJob make_job(std::uint64_t id, int m, int n, int k, int batch, int priority) {
   InferenceJob j;
   j.id = id;
   j.m = m;
@@ -35,12 +33,15 @@ InferenceJob make_job(std::uint64_t id, int m, int n, int k, int batch,
 
 std::size_t total_bytes(const std::vector<InferenceJob>& jobs) {
   std::size_t total = 0;
-  for (const auto& j : jobs) total += j.bytes_required();
+  for (const auto& j : jobs)
+    total += j.bytes_required();
   return total;
 }
 
-void cpu_reference(const InferenceJob& job, const std::vector<float>& a,
-                   const std::vector<float>& b, std::vector<float>& c) {
+void cpu_reference(const InferenceJob& job,
+                   const std::vector<float>& a,
+                   const std::vector<float>& b,
+                   std::vector<float>& c) {
   for (int bi = 0; bi < job.batch; ++bi) {
     const float* ab = a.data() + static_cast<std::size_t>(bi) * job.m * job.k;
     const float* bb = b.data() + static_cast<std::size_t>(bi) * job.k * job.n;
@@ -49,8 +50,7 @@ void cpu_reference(const InferenceJob& job, const std::vector<float>& a,
       for (int n = 0; n < job.n; ++n) {
         double acc = 0.0;
         for (int k = 0; k < job.k; ++k) {
-          acc += static_cast<double>(ab[m * job.k + k]) *
-                 static_cast<double>(bb[k * job.n + n]);
+          acc += static_cast<double>(ab[m * job.k + k]) * static_cast<double>(bb[k * job.n + n]);
         }
         cb[m * job.n + n] = static_cast<float>(acc);
       }
@@ -69,8 +69,8 @@ TEST(PackingTest, NeverExceedsBudgetOrMaxBatch) {
     std::vector<InferenceJob> jobs;
     const int count = 1 + static_cast<int>(rng() % 64);
     for (int i = 0; i < count; ++i) {
-      jobs.push_back(make_job(static_cast<std::uint64_t>(i), dim(rng), dim(rng),
-                              dim(rng), batch_d(rng), prio(rng)));
+      jobs.push_back(make_job(
+          static_cast<std::uint64_t>(i), dim(rng), dim(rng), dim(rng), batch_d(rng), prio(rng)));
     }
     const std::uint64_t budget = budget_d(rng);
     const int max_batch = max_batch_d(rng);
@@ -91,17 +91,15 @@ TEST(PackingTest, GreedySelectsLargestCount) {
   auto j200 = make_job(2, 5, 5, 1, 2, 0);
   std::vector<InferenceJob> selected;
   std::vector<InferenceJob> remaining;
-  gbis::pack_jobs({j100a, j100b, j200}, j100a.bytes_required() * 2, 8,
-                  selected, remaining);
+  gbis::pack_jobs({j100a, j100b, j200}, j100a.bytes_required() * 2, 8, selected, remaining);
   ASSERT_EQ(selected.size(), 2u);
   EXPECT_EQ(remaining.size(), 1u);
   EXPECT_EQ(remaining[0].id, 2u);
 }
 
 TEST(PackingTest, SelectsAllWhenBudgetSufficient) {
-  std::vector<InferenceJob> jobs = {make_job(0, 8, 8, 8, 1, 1),
-                                    make_job(1, 8, 8, 8, 1, 0),
-                                    make_job(2, 8, 8, 8, 1, 2)};
+  std::vector<InferenceJob> jobs = {
+      make_job(0, 8, 8, 8, 1, 1), make_job(1, 8, 8, 8, 1, 0), make_job(2, 8, 8, 8, 1, 2)};
   std::vector<InferenceJob> selected;
   std::vector<InferenceJob> remaining;
   gbis::pack_jobs(jobs, total_bytes(jobs), 8, selected, remaining);
@@ -110,8 +108,7 @@ TEST(PackingTest, SelectsAllWhenBudgetSufficient) {
 }
 
 TEST(PriorityTest, QueueOrdersHigherPriorityFirstThenFifo) {
-  std::priority_queue<InferenceJob, std::vector<InferenceJob>, JobPriorityCompare>
-      q;
+  std::priority_queue<InferenceJob, std::vector<InferenceJob>, JobPriorityCompare> q;
   auto push = [&q](std::uint64_t seq, int priority) {
     auto j = make_job(seq, 1, 1, 1, 1, priority);
     j.seq = seq;
@@ -200,17 +197,15 @@ TEST(SchedulerTest, GpuResultsMatchCpuReference) {
         make_job(3, 17, 33, 25, 3, 2),  // non-multiples of the 32x32 tile
     };
     std::vector<std::uint64_t> seqs;
-    for (const auto& j : jobs) seqs.push_back(sched.submit(j));
+    for (const auto& j : jobs)
+      seqs.push_back(sched.submit(j));
 
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (sched.completed() < jobs.size() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (sched.completed() < jobs.size() && std::chrono::steady_clock::now() < deadline) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     sched.stop();
-    ASSERT_EQ(sched.completed(), jobs.size())
-        << "jobs did not complete within the deadline";
+    ASSERT_EQ(sched.completed(), jobs.size()) << "jobs did not complete within the deadline";
 
     for (std::size_t i = 0; i < jobs.size(); ++i) {
       const auto& job = jobs[i];
@@ -221,15 +216,13 @@ TEST(SchedulerTest, GpuResultsMatchCpuReference) {
       std::vector<float> b(sb);
       gbis::fill_matrices(job, a.data(), b.data());
       std::vector<float> got;
-      ASSERT_TRUE(sched.get_result(seqs[i], got))
-          << "missing result for job " << job.id;
+      ASSERT_TRUE(sched.get_result(seqs[i], got)) << "missing result for job " << job.id;
       ASSERT_EQ(got.size(), sc);
       std::vector<float> ref(sc);
       cpu_reference(job, a, b, ref);
       double max_err = 0.0;
       for (std::size_t e = 0; e < sc; ++e) {
-        max_err = std::max(max_err,
-                           std::fabs(static_cast<double>(got[e]) - ref[e]));
+        max_err = std::max(max_err, std::fabs(static_cast<double>(got[e]) - ref[e]));
       }
       EXPECT_LT(max_err, 1e-3) << "job " << job.id << " impl " << impl;
     }

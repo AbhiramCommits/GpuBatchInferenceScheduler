@@ -16,10 +16,9 @@ import time
 import matplotlib
 
 matplotlib.use("Agg")
+import gpuinfer
 import matplotlib.pyplot as plt
 import numpy as np
-
-import gpuinfer
 
 DEFAULT_SHAPES = [
     (2, 256, 256, 256),
@@ -121,7 +120,8 @@ def main():
 
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(
-            f, fieldnames=["shape", "batch", "m", "n", "k", "cpu_ms", "gpu_ms", "speedup"]
+            f,
+            fieldnames=["shape", "batch", "m", "n", "k", "cpu_ms", "gpu_ms", "speedup"],
         )
         writer.writeheader()
         writer.writerows(rows)

@@ -1,5 +1,7 @@
 #include "sched/scheduler.hpp"
 
+#include <cuda_runtime.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -7,8 +9,6 @@
 #include <iostream>
 #include <memory>
 #include <random>
-
-#include <cuda_runtime.h>
 
 #include "core/cuda_check.hpp"
 #include "core/device_buffer.hpp"
@@ -21,9 +21,12 @@ namespace {
 
 class CudaEvent {
  public:
-  CudaEvent() { CUDA_CHECK(cudaEventCreate(&event_)); }
+  CudaEvent() {
+    CUDA_CHECK(cudaEventCreate(&event_));
+  }
   ~CudaEvent() {
-    if (event_ != nullptr) cudaEventDestroy(event_);
+    if (event_ != nullptr)
+      cudaEventDestroy(event_);
   }
   CudaEvent(const CudaEvent&) = delete;
   CudaEvent& operator=(const CudaEvent&) = delete;
@@ -32,13 +35,16 @@ class CudaEvent {
   }
   CudaEvent& operator=(CudaEvent&& other) noexcept {
     if (this != &other) {
-      if (event_ != nullptr) cudaEventDestroy(event_);
+      if (event_ != nullptr)
+        cudaEventDestroy(event_);
       event_ = other.event_;
       other.event_ = nullptr;
     }
     return *this;
   }
-  cudaEvent_t get() const { return event_; }
+  cudaEvent_t get() const {
+    return event_;
+  }
 
  private:
   cudaEvent_t event_ = nullptr;
@@ -48,12 +54,15 @@ template <typename T>
 class PinnedHostBuffer {
  public:
   PinnedHostBuffer() = default;
-  explicit PinnedHostBuffer(std::size_t count) { allocate(count); }
-  ~PinnedHostBuffer() { release(); }
+  explicit PinnedHostBuffer(std::size_t count) {
+    allocate(count);
+  }
+  ~PinnedHostBuffer() {
+    release();
+  }
   PinnedHostBuffer(const PinnedHostBuffer&) = delete;
   PinnedHostBuffer& operator=(const PinnedHostBuffer&) = delete;
-  PinnedHostBuffer(PinnedHostBuffer&& other) noexcept
-      : data_(other.data_), count_(other.count_) {
+  PinnedHostBuffer(PinnedHostBuffer&& other) noexcept : data_(other.data_), count_(other.count_) {
     other.data_ = nullptr;
     other.count_ = 0;
   }
@@ -70,9 +79,10 @@ class PinnedHostBuffer {
 
   void allocate(std::size_t count) {
     release();
-    if (count == 0) return;
-    CUDA_CHECK(cudaHostAlloc(reinterpret_cast<void**>(&data_),
-                             count * sizeof(T), cudaHostAllocDefault));
+    if (count == 0)
+      return;
+    CUDA_CHECK(
+        cudaHostAlloc(reinterpret_cast<void**>(&data_), count * sizeof(T), cudaHostAllocDefault));
     count_ = count;
   }
 
@@ -84,10 +94,18 @@ class PinnedHostBuffer {
     count_ = 0;
   }
 
-  T* data() noexcept { return data_; }
-  const T* data() const noexcept { return data_; }
-  std::size_t size() const noexcept { return count_; }
-  std::size_t bytes() const noexcept { return count_ * sizeof(T); }
+  T* data() noexcept {
+    return data_;
+  }
+  const T* data() const noexcept {
+    return data_;
+  }
+  std::size_t size() const noexcept {
+    return count_;
+  }
+  std::size_t bytes() const noexcept {
+    return count_ * sizeof(T);
+  }
 
  private:
   T* data_ = nullptr;
@@ -108,21 +126,23 @@ struct WorkerContext {
 };
 
 bool pack_jobs(const std::vector<InferenceJob>& candidates,
-               std::size_t budget_bytes, int max_batch,
+               std::size_t budget_bytes,
+               int max_batch,
                std::vector<InferenceJob>& selected,
                std::vector<InferenceJob>& remaining) {
   selected.clear();
   remaining.clear();
 
   std::vector<InferenceJob> sorted = candidates;
-  std::stable_sort(sorted.begin(), sorted.end(),
-                   [](const InferenceJob& a, const InferenceJob& b) {
-                     const std::size_t ba = a.bytes_required();
-                     const std::size_t bb = b.bytes_required();
-                     if (ba != bb) return ba < bb;
-                     if (a.priority != b.priority) return a.priority > b.priority;
-                     return a.seq < b.seq;
-                   });
+  std::stable_sort(sorted.begin(), sorted.end(), [](const InferenceJob& a, const InferenceJob& b) {
+    const std::size_t ba = a.bytes_required();
+    const std::size_t bb = b.bytes_required();
+    if (ba != bb)
+      return ba < bb;
+    if (a.priority != b.priority)
+      return a.priority > b.priority;
+    return a.seq < b.seq;
+  });
 
   std::size_t used = 0;
   for (const auto& job : sorted) {
@@ -147,25 +167,31 @@ void fill_matrices(const InferenceJob& job, float* a, float* b) {
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   const std::size_t sa = static_cast<std::size_t>(job.m) * job.k * job.batch;
   const std::size_t sb = static_cast<std::size_t>(job.k) * job.n * job.batch;
-  for (std::size_t i = 0; i < sa; ++i) a[i] = dist(rng);
-  for (std::size_t i = 0; i < sb; ++i) b[i] = dist(rng);
+  for (std::size_t i = 0; i < sa; ++i)
+    a[i] = dist(rng);
+  for (std::size_t i = 0; i < sb; ++i)
+    b[i] = dist(rng);
 }
 
 BatchScheduler::BatchScheduler(const Options& opts) : opts_(opts) {}
 
-BatchScheduler::~BatchScheduler() { stop(); }
+BatchScheduler::~BatchScheduler() {
+  stop();
+}
 
 void BatchScheduler::start() {
   {
     std::lock_guard<std::mutex> lk(lifecycle_mutex_);
-    if (started_) return;
+    if (started_)
+      return;
     started_ = true;
     shutdown_ = false;
   }
   start_time_ = InferenceJob::Clock::now();
 
   int ndev = 0;
-  if (cudaGetDeviceCount(&ndev) != cudaSuccess) ndev = 0;
+  if (cudaGetDeviceCount(&ndev) != cudaSuccess)
+    ndev = 0;
   gpu_absent_ = (ndev == 0);
 
   monitor_.start_sampling(opts_.util_sample_ms);
@@ -180,24 +206,26 @@ void BatchScheduler::start() {
 void BatchScheduler::stop(const std::string& metrics_csv) {
   {
     std::lock_guard<std::mutex> lk(lifecycle_mutex_);
-    if (!started_) return;
+    if (!started_)
+      return;
     shutdown_ = true;
   }
   queue_cv_.notify_all();
   batch_cv_.notify_all();
-  if (dispatcher_.joinable()) dispatcher_.join();
+  if (dispatcher_.joinable())
+    dispatcher_.join();
   for (auto& w : workers_) {
-    if (w.joinable()) w.join();
+    if (w.joinable())
+      w.join();
   }
   monitor_.stop_sampling();
-  wall_seconds_ = std::chrono::duration<double>(
-                      InferenceJob::Clock::now() - start_time_)
-                      .count();
+  wall_seconds_ = std::chrono::duration<double>(InferenceJob::Clock::now() - start_time_).count();
   {
     std::lock_guard<std::mutex> lk(lifecycle_mutex_);
     started_ = false;
   }
-  if (!metrics_csv.empty()) dump_metrics_csv(metrics_csv);
+  if (!metrics_csv.empty())
+    dump_metrics_csv(metrics_csv);
   print_summary();
 }
 
@@ -223,11 +251,11 @@ std::vector<BatchScheduler::JobMetrics> BatchScheduler::metrics() const {
   return metrics_;
 }
 
-bool BatchScheduler::get_result(std::uint64_t seq,
-                                std::vector<float>& out) const {
+bool BatchScheduler::get_result(std::uint64_t seq, std::vector<float>& out) const {
   std::lock_guard<std::mutex> lk(results_mutex_);
   const auto it = results_.find(seq);
-  if (it == results_.end()) return false;
+  if (it == results_.end())
+    return false;
   out = it->second;
   return true;
 }
@@ -241,9 +269,8 @@ void BatchScheduler::dump_metrics_csv(const std::string& path) const {
   f << "job_id,seq,priority,queue_wait_ms,exec_ms,e2e_ms,ok\n";
   std::lock_guard<std::mutex> lk(metrics_mutex_);
   for (const auto& m : metrics_) {
-    f << m.job_id << ',' << m.seq << ',' << m.priority << ','
-      << m.queue_wait_ms << ',' << m.exec_ms << ',' << m.e2e_ms << ','
-      << (m.ok ? 1 : 0) << '\n';
+    f << m.job_id << ',' << m.seq << ',' << m.priority << ',' << m.queue_wait_ms << ',' << m.exec_ms
+      << ',' << m.e2e_ms << ',' << (m.ok ? 1 : 0) << '\n';
   }
 }
 
@@ -262,31 +289,32 @@ void BatchScheduler::print_summary() const {
   }
   std::sort(e2e.begin(), e2e.end());
   const auto percentile = [&e2e](double p) -> double {
-    if (e2e.empty()) return 0.0;
-    const std::size_t rank =
-        static_cast<std::size_t>(std::ceil(p / 100.0 * e2e.size()));
+    if (e2e.empty())
+      return 0.0;
+    const std::size_t rank = static_cast<std::size_t>(std::ceil(p / 100.0 * e2e.size()));
     return e2e[std::max<std::size_t>(1, rank) - 1];
   };
   const double throughput =
-      wall_seconds_ > 0.0
-          ? static_cast<double>(completed_.load()) / wall_seconds_
-          : 0.0;
-  std::printf(
-      "[scheduler] submitted=%llu completed=%llu failed=%llu wall=%.3fs\n",
-      static_cast<unsigned long long>(submitted_.load()),
-      static_cast<unsigned long long>(completed_.load()),
-      static_cast<unsigned long long>(failed), wall_seconds_);
+      wall_seconds_ > 0.0 ? static_cast<double>(completed_.load()) / wall_seconds_ : 0.0;
+  std::printf("[scheduler] submitted=%llu completed=%llu failed=%llu wall=%.3fs\n",
+              static_cast<unsigned long long>(submitted_.load()),
+              static_cast<unsigned long long>(completed_.load()),
+              static_cast<unsigned long long>(failed),
+              wall_seconds_);
   std::printf("[scheduler] throughput=%.3f jobs/s\n", throughput);
   std::printf("[scheduler] e2e latency ms: p50=%.3f p95=%.3f p99=%.3f\n",
-              percentile(50.0), percentile(95.0), percentile(99.0));
-  std::printf("[scheduler] mean gpu utilization: %.1f%%\n",
-              monitor_.mean_utilization());
+              percentile(50.0),
+              percentile(95.0),
+              percentile(99.0));
+  std::printf("[scheduler] mean gpu utilization: %.1f%%\n", monitor_.mean_utilization());
 }
 
 std::size_t BatchScheduler::budget_bytes() const {
-  if (opts_.fixed_budget_bytes > 0) return opts_.fixed_budget_bytes;
+  if (opts_.fixed_budget_bytes > 0)
+    return opts_.fixed_budget_bytes;
   const GpuStats stats = monitor_.sample();
-  if (stats.free_mem_bytes <= opts_.safety_margin_bytes) return 0;
+  if (stats.free_mem_bytes <= opts_.safety_margin_bytes)
+    return 0;
   return stats.free_mem_bytes - opts_.safety_margin_bytes;
 }
 
@@ -296,7 +324,8 @@ void BatchScheduler::dispatcher_loop() {
     {
       std::unique_lock<std::mutex> lk(queue_mutex_);
       queue_cv_.wait(lk, [this] { return shutdown_ || !queue_.empty(); });
-      if (shutdown_) break;  // drop queued work; in-flight batches complete
+      if (shutdown_)
+        break;  // drop queued work; in-flight batches complete
       while (!queue_.empty()) {
         candidates.push_back(queue_.top());
         queue_.pop();
@@ -316,7 +345,8 @@ void BatchScheduler::dispatcher_loop() {
 
     {
       std::lock_guard<std::mutex> lk(queue_mutex_);
-      for (const auto& job : remaining) queue_.push(job);
+      for (const auto& job : remaining)
+        queue_.push(job);
     }
 
     if (!selected.empty()) {
@@ -340,7 +370,8 @@ void BatchScheduler::worker_loop() {
     {
       std::unique_lock<std::mutex> lk(batch_mutex_);
       batch_cv_.wait(lk, [this] { return shutdown_ || !batch_queue_.empty(); });
-      if (shutdown_ && batch_queue_.empty()) break;
+      if (shutdown_ && batch_queue_.empty())
+        break;
       batch = std::move(batch_queue_.front());
       batch_queue_.pop_front();
     }
@@ -351,17 +382,19 @@ void BatchScheduler::worker_loop() {
       fail_batch(batch, "no gpu");
       continue;
     }
-    if (!ctx) ctx = std::make_unique<WorkerContext>();
+    if (!ctx)
+      ctx = std::make_unique<WorkerContext>();
     execute_batch(*ctx, batch);
   }
   if (ctx) {
-    if (ctx->copy_stream != nullptr) cudaStreamDestroy(ctx->copy_stream);
-    if (ctx->compute_stream != nullptr) cudaStreamDestroy(ctx->compute_stream);
+    if (ctx->copy_stream != nullptr)
+      cudaStreamDestroy(ctx->copy_stream);
+    if (ctx->compute_stream != nullptr)
+      cudaStreamDestroy(ctx->compute_stream);
   }
 }
 
-void BatchScheduler::execute_batch(WorkerContext& ctx,
-                                   const std::vector<InferenceJob>& batch) {
+void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<InferenceJob>& batch) {
   struct JobBuffers {
     DeviceBuffer<float> da;
     DeviceBuffer<float> db;
@@ -399,23 +432,35 @@ void BatchScheduler::execute_batch(WorkerContext& ctx,
 
       // H2D on the copy stream, kernel on the compute stream: the copy of the
       // next job overlaps the compute of this one.
-      CUDA_CHECK(cudaMemcpyAsync(e.da.data(), e.ha.data(), e.da.bytes(),
-                                 cudaMemcpyHostToDevice, ctx.copy_stream));
-      CUDA_CHECK(cudaMemcpyAsync(e.db.data(), e.hb.data(), e.db.bytes(),
-                                 cudaMemcpyHostToDevice, ctx.copy_stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          e.da.data(), e.ha.data(), e.da.bytes(), cudaMemcpyHostToDevice, ctx.copy_stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          e.db.data(), e.hb.data(), e.db.bytes(), cudaMemcpyHostToDevice, ctx.copy_stream));
       CUDA_CHECK(cudaEventRecord(ctx.ev_h2d.get(), ctx.copy_stream));
       CUDA_CHECK(cudaStreamWaitEvent(ctx.compute_stream, ctx.ev_h2d.get(), 0));
       if (opts_.impl == "cublas") {
-        gemm_cublas_batched(e.da.data(), e.db.data(), e.dc.data(), job.m,
-                            job.n, job.k, job.batch, ctx.compute_stream);
+        gemm_cublas_batched(e.da.data(),
+                            e.db.data(),
+                            e.dc.data(),
+                            job.m,
+                            job.n,
+                            job.k,
+                            job.batch,
+                            ctx.compute_stream);
       } else {
-        gemm_tiled_batched(e.da.data(), e.db.data(), e.dc.data(), job.m,
-                           job.n, job.k, job.batch, ctx.compute_stream);
+        gemm_tiled_batched(e.da.data(),
+                           e.db.data(),
+                           e.dc.data(),
+                           job.m,
+                           job.n,
+                           job.k,
+                           job.batch,
+                           ctx.compute_stream);
       }
       CUDA_CHECK(cudaEventRecord(ctx.ev_kern.get(), ctx.compute_stream));
       CUDA_CHECK(cudaStreamWaitEvent(ctx.copy_stream, ctx.ev_kern.get(), 0));
-      CUDA_CHECK(cudaMemcpyAsync(e.hc.data(), e.dc.data(), e.dc.bytes(),
-                                 cudaMemcpyDeviceToHost, ctx.copy_stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          e.hc.data(), e.dc.data(), e.dc.bytes(), cudaMemcpyDeviceToHost, ctx.copy_stream));
       CUDA_CHECK(cudaEventRecord(e.done.get(), ctx.copy_stream));
     }
 
@@ -452,8 +497,7 @@ void BatchScheduler::execute_batch(WorkerContext& ctx,
   }
 }
 
-void BatchScheduler::fail_batch(const std::vector<InferenceJob>& batch,
-                                const std::string& reason) {
+void BatchScheduler::fail_batch(const std::vector<InferenceJob>& batch, const std::string& reason) {
   (void)reason;
   std::lock_guard<std::mutex> lk(metrics_mutex_);
   for (const auto& job : batch) {

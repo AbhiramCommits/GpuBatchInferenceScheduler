@@ -1,9 +1,9 @@
 #include "sched/gpu_monitor.hpp"
 
-#include <chrono>
-
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+
+#include <chrono>
 
 namespace gbis {
 
@@ -37,7 +37,8 @@ struct GpuMonitor::Impl {
 
   ~Impl() {
     if (handle != nullptr) {
-      if (shutdown != nullptr) shutdown();
+      if (shutdown != nullptr)
+        shutdown();
       dlclose(handle);
     }
   }
@@ -49,22 +50,16 @@ GpuMonitor::GpuMonitor() : impl_(std::make_unique<Impl>()) {
   impl_->handle = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
   if (impl_->handle != nullptr) {
     impl_->init = reinterpret_cast<int (*)()>(dlsym(impl_->handle, "nvmlInit"));
-    impl_->shutdown =
-        reinterpret_cast<int (*)()>(dlsym(impl_->handle, "nvmlShutdown"));
-    impl_->device_get_handle_by_index =
-        reinterpret_cast<int (*)(unsigned int, NvmlDevice*)>(
-            dlsym(impl_->handle, "nvmlDeviceGetHandleByIndex"));
-    impl_->device_get_memory_info =
-        reinterpret_cast<int (*)(NvmlDevice, NvmlMemory*)>(
-            dlsym(impl_->handle, "nvmlDeviceGetMemoryInfo"));
-    impl_->device_get_utilization_rates =
-        reinterpret_cast<int (*)(NvmlDevice, NvmlUtilization*)>(
-            dlsym(impl_->handle, "nvmlDeviceGetUtilizationRates"));
+    impl_->shutdown = reinterpret_cast<int (*)()>(dlsym(impl_->handle, "nvmlShutdown"));
+    impl_->device_get_handle_by_index = reinterpret_cast<int (*)(unsigned int, NvmlDevice*)>(
+        dlsym(impl_->handle, "nvmlDeviceGetHandleByIndex"));
+    impl_->device_get_memory_info = reinterpret_cast<int (*)(NvmlDevice, NvmlMemory*)>(
+        dlsym(impl_->handle, "nvmlDeviceGetMemoryInfo"));
+    impl_->device_get_utilization_rates = reinterpret_cast<int (*)(NvmlDevice, NvmlUtilization*)>(
+        dlsym(impl_->handle, "nvmlDeviceGetUtilizationRates"));
     if (impl_->init != nullptr && impl_->shutdown != nullptr &&
-        impl_->device_get_handle_by_index != nullptr &&
-        impl_->device_get_memory_info != nullptr &&
-        impl_->device_get_utilization_rates != nullptr &&
-        impl_->init() == 0 &&
+        impl_->device_get_handle_by_index != nullptr && impl_->device_get_memory_info != nullptr &&
+        impl_->device_get_utilization_rates != nullptr && impl_->init() == 0 &&
         impl_->device_get_handle_by_index(0, &impl_->device) == 0) {
       nvml_available_ = true;
       gpu_present_ = true;
@@ -81,7 +76,9 @@ GpuMonitor::GpuMonitor() : impl_(std::make_unique<Impl>()) {
   }
 }
 
-GpuMonitor::~GpuMonitor() { stop_sampling(); }
+GpuMonitor::~GpuMonitor() {
+  stop_sampling();
+}
 
 GpuStats GpuMonitor::sample() const {
   GpuStats stats;
@@ -107,7 +104,8 @@ GpuStats GpuMonitor::sample() const {
 }
 
 void GpuMonitor::start_sampling(int interval_ms) {
-  if (!gpu_present_ || sampling_.exchange(true)) return;
+  if (!gpu_present_ || sampling_.exchange(true))
+    return;
   sampler_ = std::thread([this, interval_ms] {
     while (sampling_.load()) {
       const GpuStats st = sample();
@@ -123,7 +121,8 @@ void GpuMonitor::start_sampling(int interval_ms) {
 
 void GpuMonitor::stop_sampling() {
   sampling_.store(false);
-  if (sampler_.joinable()) sampler_.join();
+  if (sampler_.joinable())
+    sampler_.join();
 }
 
 double GpuMonitor::mean_utilization() const {
