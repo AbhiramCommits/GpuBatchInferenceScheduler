@@ -24,7 +24,9 @@ test_scheduler
 # Runtime artifacts
 scheduler_metrics.csv
 *.pcm
-results/
+results/*
+!results/benchmark.csv
+!results/speedup.png
 
 # Python
 __pycache__/

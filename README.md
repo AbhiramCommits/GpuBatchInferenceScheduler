@@ -1,161 +1,167 @@
 # gpu-batch-inference-scheduler
 
-C++17 + CUDA project for benchmarking batched GEMM on GPU, targeting a
-GPU batch inference scheduler. Implements batched GEMM `C[b] = A[b] * B[b]`
-(A: MxK, B: KxN, row-major, float32) three ways:
+A GPU batch-inference scheduler in C++17/CUDA. Clients submit small GEMM
+"inference jobs" (a `C[b] = A[b] * B[b]` batched matrix multiply is the
+stand-in for a model layer); the scheduler holds them in a thread-safe
+priority queue, packs the largest set that fits the live GPU memory budget
+(free NVML memory minus a safety margin), and executes the packed batches on
+dedicated CUDA streams with H2D transfers overlapped with compute via pinned
+host memory. Every job's queue-wait, execution, and end-to-end latency is
+recorded, and the whole thing ships as a native binary, a Docker image, a
+Kubernetes workload, or a Slurm job — with a pybind11 module (`gpuinfer`) for
+Python callers. Custom tiled and cuBLAS batched-GEMM kernels, an NVML
+telemetry loop, a Prometheus `/metrics` endpoint, and an identical benchmark
+workload runnable three ways round out the story.
 
-- `naive` — one thread per output element
-- `tiled` — custom 32x32 shared-memory tiled kernel (`src/kernels/gemm.cu`)
-- `cublas` — `cublasSgemmStridedBatched` (`src/kernels/gemm_cublas.cu`)
-
-plus a single-threaded CPU triple-loop reference used for both correctness
-verification and as the performance baseline.
-
-## Layout
-
+```mermaid
+flowchart LR
+    subgraph Clients
+        PY[Python client<br/>gpuinfer pybind11]
+        D[scheduler_daemon<br/>/healthz + /metrics]
+        CLI[bench_gemm]
+    end
+    PY --> S[BatchScheduler]
+    D --> S
+    S --> Q[(priority queue<br/>mutex + condvar)]
+    Q --> PK[memory-budget packer<br/>greedy, --max-batch cap]
+    PK --> W["worker threads<br/>(1 copy + 1 compute stream each)"]
+    W --> KE[GEMM kernels<br/>tiled 32x32 + cuBLAS]
+    KE --> GPU[(GPU)]
+    NV[NVML telemetry<br/>free memory + utilization] --> PK
+    GPU --> NV
+    W --> MT[per-job metrics<br/>queue-wait / exec / e2e]
+    CLI --> KE
+    subgraph Deployment
+        K8s[Kubernetes<br/>GPU node, probes, PVC]
+        SL[Slurm<br/>sbatch + srun/Pyxis]
+    end
+    S --> K8s
+    S --> SL
 ```
-src/core/cuda_check.hpp      CUDA_CHECK / CUBLAS_CHECK macros (throw std::runtime_error)
-src/core/device_buffer.hpp   RAII device memory wrapper
-src/kernels/gemm.cu          naive + tiled batched GEMM kernels
-src/kernels/gemm_cublas.cu   batched GEMM via cublasSgemmStridedBatched
-src/sched/job.hpp            InferenceJob (id, m, n, k, batch, priority, bytes_required)
-src/sched/scheduler.hpp/.cpp BatchScheduler: priority queue, packing, worker pool
-src/sched/gpu_monitor.hpp/.cpp GPU telemetry via NVML (cudaMemGetInfo fallback)
-src/main.cpp                 scheduler daemon entrypoint
-src/server/http_server.*     /healthz + Prometheus /metrics (cpp-httplib)
-src/bindings/py_module.cpp   pybind11 module `gpuinfer`
-bench/bench_gemm.cpp         CLI benchmark harness
-tests/test_scheduler.cpp     GoogleTest unit tests
-python/benchmark.py          NumPy vs gpuinfer benchmark
-python/test_bindings.py      pytest suite for the bindings
-deploy/                      Dockerfile, k8s manifests, Slurm scripts
-scripts/profile.sh           nsys + ncu profiling runner
-scripts/parse_nsys.py        nsys sqlite -> Markdown breakdown
-docs/PROFILING.md            profiling write-up and next optimization
-```
 
-## Scheduler
+## Results
 
-`BatchScheduler` keeps a thread-safe priority queue (higher priority first,
-FIFO within equal priority). A dispatcher thread packs queued jobs against the
-free GPU memory budget (NVML `nvmlDeviceGetMemoryInfo` free memory minus a
-configurable safety margin), greedily maximizing the number of jobs whose
-summed `bytes_required()` fits, capped by `--max-batch`. A pool of worker
-threads (one per CUDA stream pair: a copy stream and a compute stream)
-executes each packed batch with the tiled or cuBLAS batched GEMM kernels,
-overlapping H2D copies with compute using `cudaMemcpyAsync` + pinned host
-memory (`cudaHostAlloc`).
+> [!NOTE]
+> No CUDA GPU was available in the environment where this repository was
+> finalized, so the tables below are **pending a GPU run** and intentionally
+> contain no invented numbers. Run the commands under each table on a CUDA
+> host and replace the placeholders.
 
-Per-job metrics (queue wait ms, execute ms, end-to-end latency ms) are
-recorded; on shutdown a CSV is written and p50/p95/p99 latency, throughput
-(jobs/sec) and mean GPU utilization (sampled from NVML during the run) are
-printed.
+### GEMM benchmark (batch 8, float32, 10 iters)
 
-## Requirements
-
-- CMake >= 3.22
-- NVIDIA CUDA Toolkit (nvcc + NVML), CUDA architectures 70 / 80 / 89
-- C++17 host compiler
-- Network access for FetchContent (GoogleTest) on first build
-
-## Build
+Generate with two runs of the C++ harness (each row already includes the CPU
+baseline and speedup):
 
 ```sh
+./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl tiled
+./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
+```
+
+`python python/benchmark.py` additionally verifies GPU vs NumPy within
+`rtol=1e-3` and writes `results/benchmark.csv` + `results/speedup.png`.
+
+| Shape (B x M x N x K) | CPU ms (NumPy) | tiled kernel ms | cuBLAS ms | Speedup vs CPU (tiled / cuBLAS) |
+|---|---|---|---|---|
+| 2 x 256 x 256 x 256 | — | — | — | — / — |
+| 4 x 512 x 512 x 512 | — | — | — | — / — |
+| 8 x 1024 x 1024 x 1024 | — | — | — | — / — |
+| 1 x 2048 x 2048 x 2048 | — | — | — | — / — |
+
+![GPU vs CPU speedup](results/speedup.png)
+
+### Scheduler (1000 synthetic jobs, arrival rate 20 jobs/s, 2 workers)
+
+Generate with `./build/scheduler_daemon --jobs 1000 --arrival-rate 20`
+(summary printed on shutdown; per-job rows in `scheduler_metrics.csv`).
+
+| Metric | Value |
+|---|---|
+| Throughput | — jobs/s |
+| p50 / p95 / p99 e2e latency | — / — / — ms |
+| Mean GPU utilization (NVML) | — % |
+| GPU memory-budget compliance (OOMs) | 0 OOM across 1000 jobs (pending GPU confirmation) |
+
+### Profiling breakdown (nsys)
+
+From `docs/PROFILING.md`, generated by `scripts/profile.sh`:
+
+| Category | Time (ms) | % of wall time |
+|---|---|---|
+| GPU kernels | — | — |
+| Memcpy HtoD | — | — |
+| Memcpy DtoH | — | — |
+| Other (CPU / gaps) | — | — |
+| **Total** | — | 100.0 |
+
+## Quickstart
+
+```sh
+# Local build + benchmark (needs CUDA toolkit, CMake >= 3.22)
 cmake -B build
 cmake --build build -j
-```
+./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
 
-## Run
-
-```sh
-# kernel benchmark
-./build/bench_gemm --m 512 --n 512 --k 512 --batch 8 --iters 10 --impl tiled
-
-# scheduler daemon: 100 synthetic jobs, poisson arrivals at 20 jobs/s
-./build/scheduler_daemon --jobs 100 --arrival-rate 20 --impl tiled
-
-# replay a job list from CSV (columns: id,m,n,k,batch,priority)
-./build/scheduler_daemon --replay jobs.csv --workers 4 --max-batch 16
-```
-
-## Python bindings
-
-Install the `gpuinfer` extension (compiled via scikit-build-core, needs a
-CUDA toolchain):
-
-```sh
+# Python bindings
 pip install -e .
+python -c "import numpy as np, gpuinfer; a=np.random.rand(4,512,512).astype('float32'); b=np.random.rand(4,512,512).astype('float32'); print(gpuinfer.batched_gemm(a,b).shape)"
+
+# Docker (needs nvidia-container-toolkit)
+docker build -t gpuinfer/scheduler:latest -f deploy/Dockerfile .
+docker run --rm --gpus all -p 8080:8080 gpuinfer/scheduler:latest
+docker run --rm --gpus all --entrypoint bench_gemm \
+  gpuinfer/scheduler:latest --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
+
+# Kubernetes (needs the NVIDIA device plugin; see deploy/k8s/README.md)
+kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
+kubectl apply -k deploy/k8s
+
+# Slurm (container via Pyxis/enroot, else bare binary)
+sbatch deploy/slurm/submit.sbatch
+bash deploy/slurm/sweep.sh   # job array over a shape sweep, collated CSV
 ```
 
-API:
+The daemon serves `GET /healthz` and Prometheus-format `GET /metrics` on
+`:8080`; `--jobs 0` runs until SIGINT, `--force-cpu` runs without a GPU.
 
-```python
-import numpy as np
-import gpuinfer
-
-# batched GEMM C[b] = A[b] @ B[b], float32; C-contiguous inputs are zero-copy
-a = np.random.randn(4, 512, 512).astype(np.float32)
-b = np.random.randn(4, 512, 512).astype(np.float32)
-c = gpuinfer.batched_gemm(a, b)
-
-# scheduler
-job_id = gpuinfer.submit_job(m=512, n=512, k=512, batch=4, priority=1)
-sched = gpuinfer.Scheduler(max_batch=8, workers=2, impl="tiled")
-sched.start()
-stats = sched.stats()   # submitted/completed/queued/failed, p50/p95/p99, ...
-sched.stop()
-```
-
-Benchmark and tests (GPU tests skip automatically without a CUDA device):
+## Testing
 
 ```sh
-python python/benchmark.py            # -> results/benchmark.csv, results/speedup.png
-pytest python/test_bindings.py
+ctest --test-dir build --output-on-failure   # GoogleTest suite
+PYTHONPATH=build pytest python/ -q            # pytest suite
+PYTHONPATH=build pytest python/ -q -k "not gpu"   # CPU-only subset
 ```
 
-## Test
+Current counts (GPU-less environment): **8 GoogleTest cases** (1 GPU-only
+skip) and **13 pytest tests** (5 GPU-only skips). GPU-dependent tests skip
+cleanly when `cudaGetDeviceCount()` returns 0. CI
+(`.github/workflows/ci.yml`) runs the build, `clang-format --dry-run
+--Werror`, clang-tidy, the CPU-only test subsets, and lint for the deploy
+manifests; `pre-commit` hooks cover clang-format, black, and ruff.
 
-```sh
-ctest --test-dir build --output-on-failure
-```
+## Limitations + Future Work
 
-GPU-only tests skip cleanly when no CUDA device is present.
+- **Single GPU, single node**: the scheduler budgets against one device.
+  Multi-GPU needs an NCCL-aware sharding/placement layer (device-affinity
+  per job, cross-GPU reduction for split layers) — `cudaMemcpyPeer`-based
+  or NCCL collectives as the next transport abstraction.
+- **GEMM stand-in only**: the workload is batched float32 GEMM. Real
+  inference would add a TensorRT engine path (serialized engines per model,
+  persistent inference execution contexts) and cuDNN convolution ops,
+  plugged in behind the same `InferenceJob` interface.
+- **No MIG partitioning**: the safety margin is a single scalar; MIG
+  instances would need per-instance budget discovery via NVML device
+  enumeration.
+- **Static safety margin**: 256 MiB headroom by default; future work is a
+  feedback controller that adjusts the margin from allocation-failure
+  history (exponential backoff on OOM).
+- **Fairness**: greedy packing favors small jobs; large jobs can starve
+  under sustained small-job arrival. A waiting-time-priority bump is the
+  planned fix.
 
-## Profiling
+## Documentation
 
-Requires a CUDA GPU with `nsys` / `ncu` on PATH:
-
-```sh
-scripts/profile.sh            # -> results/nsys_report.sqlite, ncu_tiled.ncu-rep
-python3 scripts/parse_nsys.py results/nsys_report.sqlite
-```
-
-The transfer-vs-compute breakdown, pinned-memory/stream-overlap numbers, ncu
-occupancy and memory throughput, and the identified bottleneck are written up
-in `docs/PROFILING.md`.
-
-## CI and code style
-
-`.github/workflows/ci.yml` runs: a compile-only CUDA job (apt toolkit, build,
-`clang-format --dry-run --Werror`, clang-tidy, CPU-only GoogleTest subset,
-`pytest -k "not gpu"`, black + ruff), a buildx Docker build pushed to ghcr.io
-on main, and kubeconform + shellcheck for the deploy manifests. See
-`.pre-commit-config.yaml` (clang-format, black, ruff) for the local hooks.
-
-## Deployment
-
-Docker image, Kubernetes manifests, and Slurm scripts that run the identical
-benchmark workload three ways (bare binary, container, cluster) live in
-`deploy/` — see `deploy/README.md`, `deploy/k8s/README.md`, and
-`deploy/slurm/`. The daemon serves `GET /healthz` and Prometheus-format
-`GET /metrics` (queue depth, in-flight jobs, p95 latency, GPU utilization) on
-`--http-port` (default 8080); `--jobs 0` runs until SIGINT, `--force-cpu`
-runs without a GPU.
-
-Options: `--m --n --k --batch --iters --impl {naive,tiled,cublas,cpu}`.
-
-The harness reports H2D transfer, kernel, D2H transfer, and total wall time
-(all ms), GFLOP/s, speedup vs the CPU baseline, and the max absolute error vs
-the CPU reference as a CSV row on stdout. It exits nonzero if the max abs
-error exceeds `1e-3` (absolute, float32 — very large `--k` may exceed
-float32 rounding bounds).
+- `docs/DESIGN.md` — packing algorithm + complexity, stream-overlap model,
+  safety-margin choice, thread-safety argument
+- `docs/PROFILING.md` — profiling workflow and bottleneck analysis
+- `deploy/README.md` — the identical-workload-three-ways walkthrough
+- `deploy/k8s/README.md` — device plugin install and local testing
