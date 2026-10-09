@@ -26,10 +26,14 @@ jobs:
       # Compile-only CUDA toolkit install (~2-3 min, no GPU required).
       - uses: Jimver/cuda-toolkit@v0.2.21
         with:
-          cuda: "12.4.0"
+          # 12.4 has no packages in NVIDIA's ubuntu2404 apt repo (ubuntu-latest);
+          # 12.6 is the first line published there.
+          cuda: "12.6.3"
           method: network
-          sub-packages: '["nvcc", "cudart-dev", "cublas-dev"]'
-          non-cuda-sub-packages: '["libc6-dev", "g++"]'
+          sub-packages: '["nvcc", "cudart-dev"]'
+          # The action appends "-<major>-<minor>" to these, so only CUDA
+          # library packages belong here (libcublas-dev -> libcublas-dev-12-6).
+          non-cuda-sub-packages: '["libcublas-dev"]'
 
       - name: Install tooling
         run: |
@@ -40,9 +44,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ runner.os }}-cuda12.4-${{ github.ref }}
+          key: ccache-${{ runner.os }}-cuda12.6-${{ github.ref }}
           restore-keys: |
-            ccache-${{ runner.os }}-cuda12.4-
+            ccache-${{ runner.os }}-cuda12.6-
 
       - name: Configure
         run: >
@@ -102,12 +106,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Image references must be lowercase; github.repository keeps the
+      # owner/repo casing.
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/scheduler" >> "$GITHUB_ENV"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: ghcr.io/${{ github.repository }}/scheduler:latest
+          tags: ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
