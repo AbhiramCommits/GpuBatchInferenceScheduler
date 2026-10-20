@@ -10,7 +10,10 @@ namespace gbis {
 
 namespace {
 
-// Process-lifetime cuBLAS handle, destroyed at exit. Owned by RAII.
+// Per-thread cuBLAS handle, destroyed at thread exit. Owned by RAII. A
+// handle carries the current stream, so sharing one across scheduler worker
+// threads would let one worker's cublasSetStream redirect another worker's
+// GEMM onto the wrong stream.
 class CublasHandle {
  public:
   CublasHandle() {
@@ -41,7 +44,7 @@ class CublasHandle {
 // swapped leading dimensions and per-batch strides.
 void gemm_cublas_batched(
     const float* A, const float* B, float* C, int M, int N, int K, int batch, cudaStream_t stream) {
-  static CublasHandle handle;
+  static thread_local CublasHandle handle;
   CUBLAS_CHECK(cublasSetStream(handle.get(), stream));
 
   const float alpha = 1.0f;

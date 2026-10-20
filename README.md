@@ -1,17 +1,13 @@
 # gpu-batch-inference-scheduler
 
-A GPU batch-inference scheduler in C++17/CUDA. Clients submit small GEMM
-"inference jobs" (a `C[b] = A[b] * B[b]` batched matrix multiply is the
-stand-in for a model layer); the scheduler holds them in a thread-safe
-priority queue, packs the largest set that fits the live GPU memory budget
-(free NVML memory minus a safety margin), and executes the packed batches on
-dedicated CUDA streams with H2D transfers overlapped with compute via pinned
-host memory. Every job's queue-wait, execution, and end-to-end latency is
-recorded, and the whole thing ships as a native binary, a Docker image, a
-Kubernetes workload, or a Slurm job — with a pybind11 module (`gpuinfer`) for
-Python callers. Custom tiled and cuBLAS batched-GEMM kernels, an NVML
-telemetry loop, a Prometheus `/metrics` endpoint, and an identical benchmark
-workload runnable three ways round out the story.
+A GPU batch-inference scheduler in C++17/CUDA. Clients submit GEMM "inference
+jobs" (`C[b] = A[b] * B[b]`); a thread-safe priority queue feeds a
+memory-budget packer that executes batches on dedicated CUDA streams.
+Waiting-time aging keeps large jobs from starving. The repo ships native
+binaries, a pybind11 module (`gpuinfer`), NVML telemetry, `/metrics`, and
+Docker/Kubernetes/Slurm manifests.
+
+**Hardware:** Tesla T4 (sm_75), NVIDIA driver 580.82.07, CUDA 13.0; FP32 peak used 8.1408 TFLOP/s (`results/hardware.txt`).
 
 ```mermaid
 flowchart LR
@@ -23,7 +19,7 @@ flowchart LR
     PY --> S[BatchScheduler]
     D --> S
     S --> Q[(priority queue<br/>mutex + condvar)]
-    Q --> PK[memory-budget packer<br/>greedy, --max-batch cap]
+    Q --> PK[memory-budget packer<br/>greedy + wait aging, --max-batch cap]
     PK --> W["worker threads<br/>(1 copy + 1 compute stream each)"]
     W --> KE[GEMM kernels<br/>tiled 32x32 + cuBLAS]
     KE --> GPU[(GPU)]
@@ -41,84 +37,85 @@ flowchart LR
 
 ## Results
 
-> [!NOTE]
-> No CUDA GPU was available in the environment where this repository was
-> finalized, so the tables below are **pending a GPU run** and intentionally
-> contain no invented numbers. Run the commands under each table on a CUDA
-> host and replace the placeholders.
+GEMM timings are kernel-only medians from 10 warmup + 60 timed runs measured
+with cudaEvents; full data, including end-to-end transfers and percent-of-peak,
+is in `results/benchmark.csv`. Scheduler runs are in
+`results/scheduler_stress.csv`. Profiling numbers are in `docs/PROFILING.md`.
 
-### GEMM benchmark (batch 8, float32, 10 iters)
+### Tiled vs cuBLAS
 
-Generate with two runs of the C++ harness (each row already includes the CPU
-baseline and speedup):
+cuBLAS is the GPU baseline. The tiled kernel is a simple 32×32×32
+shared-memory SGEMM; the table shows how far it is from cuBLAS, not just how
+far both are from the CPU.
 
-```sh
-./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl tiled
-./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
-```
+| Shape (B × M × N × K) | tiled kernel ms | cuBLAS kernel ms | tiled % of cuBLAS | tiled / cuBLAS GFLOP/s |
+|---|---:|---:|---:|---:|
+| 2 × 256 × 256 × 256 | 0.210 | 0.049 | 23.2% | 319 / 1378 |
+| 4 × 512 × 512 × 512 | 1.353 | 0.217 | 16.1% | 793 / 4937 |
+| 8 × 1024 × 1024 × 1024 | 16.514 | 2.333 | 14.1% | 1040 / 7365 |
+| 1 × 2048 × 2048 × 2048 | 17.125 | 2.368 | 13.8% | 1003 / 7254 |
+| 3 × 257 × 129 × 65 | 0.037 | 0.020 | 52.9% | 345 / 653 |
+| 8 × 257 × 257 × 257 | 0.388 | 0.104 | 26.7% | 700 / 2620 |
+| 4 × 1000 × 33 × 31 | 0.033 | 0.016 | 47.4% | 247 / 520 |
+| 2 × 1000 × 1 × 1000 | 0.225 | 0.038 | 17.0% | 18 / 105 |
+| 1 × 1 × 1000 × 1000 | 0.116 | 0.015 | 13.0% | 17 / 132 |
+| 1 × 1000 × 1000 × 1 | 0.111 | 0.030 | 26.7% | 18 / 68 |
 
-`python python/benchmark.py` additionally verifies GPU vs NumPy within
-`rtol=1e-3` and writes `results/benchmark.csv` + `results/speedup.png`.
+On the four README shapes tiled is **14–23% of cuBLAS**; on the large shapes
+it reaches 12–13% of T4 FP32 peak while cuBLAS reaches ~89–90%. Skinny
+matrices are worse: tiled falls to 13–27% of cuBLAS because a 32-wide tile
+wastes most of its lanes. The CPU baseline (NumPy/OpenBLAS, 2 threads on
+2 vCPU) and speedups are in `results/benchmark.csv`; this table focuses on the
+GPU-vs-GPU comparison.
 
-| Shape (B x M x N x K) | CPU ms (NumPy) | tiled kernel ms | cuBLAS ms | Speedup vs CPU (tiled / cuBLAS) |
-|---|---|---|---|---|
-| 2 x 256 x 256 x 256 | — | — | — | — / — |
-| 4 x 512 x 512 x 512 | — | — | — | — / — |
-| 8 x 1024 x 1024 x 1024 | — | — | — | — / — |
-| 1 x 2048 x 2048 x 2048 | — | — | — | — / — |
+![Tiled vs cuBLAS kernel throughput](results/speedup.png)
 
-![GPU vs CPU speedup](results/speedup.png)
+### Scheduler
 
-### Scheduler (1000 synthetic jobs, arrival rate 20 jobs/s, 2 workers)
-
-Generate with `./build/scheduler_daemon --jobs 1000 --arrival-rate 20`
-(summary printed on shutdown; per-job rows in `scheduler_metrics.csv`).
-
-| Metric | Value |
+| Workload | Result |
 |---|---|
-| Throughput | — jobs/s |
-| p50 / p95 / p99 e2e latency | — / — / — ms |
-| Mean GPU utilization (NVML) | — % |
-| GPU memory-budget compliance (OOMs) | 0 OOM across 1000 jobs (pending GPU confirmation) |
+| 1000 jobs at 20 jobs/s, 2 workers | **19.36 jobs/s**; p50/p95/p99 **33.6 / 135.8 / 188.9 ms**; 11.7% mean NVML utilization; **0 OOM, 0 failed** |
+| 6.63× GPU memory queued | 99.5 GiB queued on a 15.0 GiB GPU; 2 oversized jobs rejected cleanly; 998 executed; **0 cudaMalloc failures** |
+| External memory hog | 24/24 jobs completed; 34 transient cudaMalloc failures retried; **0 final OOM** |
 
-### Profiling breakdown (nsys)
+The 256 MiB margin alone is not what makes this safe under external pressure:
+the scheduler reserves bytes for packed-but-unfinished batches and retries
+`cudaMalloc` with backoff. Jobs larger than the device budget are rejected
+once instead of being re-enqueued forever.
 
-From `docs/PROFILING.md`, generated by `scripts/profile.sh`:
+### Profiling breakdown (nsys, 8×1024×1024×1024 GEMM)
 
-| Category | Time (ms) | % of wall time |
-|---|---|---|
-| GPU kernels | — | — |
-| Memcpy HtoD | — | — |
-| Memcpy DtoH | — | — |
-| Other (CPU / gaps) | — | — |
-| **Total** | — | 100.0 |
+| Category | Time (ms) | % of wall |
+|---|---:|---:|
+| GPU kernels | 375.571 | 44.86 |
+| Memcpy HtoD | 294.585 | 35.19 |
+| Memcpy DtoH | 150.633 | 17.99 |
+| Other (CPU / gaps) | 16.441 | 1.96 |
+| **Total** | **837.230** | **100.00** |
+
+Transfers are 53.2% of the wall and overlap the kernel for 0% of their time.
+The nsys timeline, the scheduler-side idle-gap analysis, and the proposed
+double-buffered copy fix are in `docs/PROFILING.md`.
 
 ## Quickstart
 
 ```sh
-# Local build + benchmark (needs CUDA toolkit, CMake >= 3.22)
-cmake -B build
-cmake --build build -j
+# Build and benchmark (CUDA toolkit + CMake >= 3.22)
+cmake -B build && cmake --build build -j
 ./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
-
-# Python bindings
 pip install -e .
 python -c "import numpy as np, gpuinfer; a=np.random.rand(4,512,512).astype('float32'); b=np.random.rand(4,512,512).astype('float32'); print(gpuinfer.batched_gemm(a,b).shape)"
-
-# Docker (needs nvidia-container-toolkit)
+# Deployment commands below are untested on this host; see deploy/README.md.
 docker build -t gpuinfer/scheduler:latest -f deploy/Dockerfile .
 docker run --rm --gpus all -p 8080:8080 gpuinfer/scheduler:latest
-docker run --rm --gpus all --entrypoint bench_gemm \
-  gpuinfer/scheduler:latest --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
-
-# Kubernetes (needs the NVIDIA device plugin; see deploy/k8s/README.md)
-kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
 kubectl apply -k deploy/k8s
-
-# Slurm (container via Pyxis/enroot, else bare binary)
 sbatch deploy/slurm/submit.sbatch
-bash deploy/slurm/sweep.sh   # job array over a shape sweep, collated CSV
 ```
+
+**Deployment status:** only the bare-host path was validated. Docker,
+Kubernetes, and Slurm are **untested**; this Colab VM is a nested container
+with threaded cgroups and no systemd, so container and Slurm daemons cannot
+start. Details are in `deploy/README.md`.
 
 The daemon serves `GET /healthz` and Prometheus-format `GET /metrics` on
 `:8080`; `--jobs 0` runs until SIGINT, `--force-cpu` runs without a GPU.
@@ -128,40 +125,42 @@ The daemon serves `GET /healthz` and Prometheus-format `GET /metrics` on
 ```sh
 ctest --test-dir build --output-on-failure   # GoogleTest suite
 PYTHONPATH=build pytest python/ -q            # pytest suite
-PYTHONPATH=build pytest python/ -q -k "not gpu"   # CPU-only subset
 ```
 
-Current counts (GPU-less environment): **8 GoogleTest cases** (1 GPU-only
-skip) and **13 pytest tests** (5 GPU-only skips). GPU-dependent tests skip
-cleanly when `cudaGetDeviceCount()` returns 0. CI
-(`.github/workflows/ci.yml`) runs the build, `clang-format --dry-run
---Werror`, clang-tidy, the CPU-only test subsets, and lint for the deploy
-manifests; `pre-commit` hooks cover clang-format, black, and ruff.
+On the T4: **96 GoogleTest cases** (87 kernel correctness + 9 scheduler) and
+**31 pytest tests** passed with no GPU skips. Earlier compute-sanitizer runs
+(memcheck, racecheck, synccheck) reported 0 errors/hazards on `bench_gemm` and
+on `scheduler_daemon --jobs 200`. CI runs the build, clang-format, clang-tidy,
+the CPU-only test subsets, and deploy-manifest lint.
+
+## What I learned
+
+- The tiled kernel gets ~14% of cuBLAS on large squares and 13–27% on skinny
+  cases; the 32-wide tile simply wastes lanes when the matrix is thin.
+- Pinned memory did the real work. Splitting streams bought almost nothing
+  because the next H2D sat behind the previous D2H, which waited on the kernel.
+- "Zero OOM" only mattered once another process fought for memory; sampling
+  NVML and then losing the cudaMalloc race taught me to retry with backoff.
+- Greedy packing really does starve a big job, and aging only worked after I
+  stopped pre-packing the whole queue.
+- Docker, Kubernetes, and Slurm are still untested. Colab's nested VM cannot
+  create containers or systemd cgroups, so I'm not going to pretend otherwise.
 
 ## Limitations + Future Work
 
-- **Single GPU, single node**: the scheduler budgets against one device.
-  Multi-GPU needs an NCCL-aware sharding/placement layer (device-affinity
-  per job, cross-GPU reduction for split layers) — `cudaMemcpyPeer`-based
-  or NCCL collectives as the next transport abstraction.
-- **GEMM stand-in only**: the workload is batched float32 GEMM. Real
-  inference would add a TensorRT engine path (serialized engines per model,
-  persistent inference execution contexts) and cuDNN convolution ops,
-  plugged in behind the same `InferenceJob` interface.
-- **No MIG partitioning**: the safety margin is a single scalar; MIG
-  instances would need per-instance budget discovery via NVML device
-  enumeration.
-- **Static safety margin**: 256 MiB headroom by default; future work is a
-  feedback controller that adjusts the margin from allocation-failure
-  history (exponential backoff on OOM).
-- **Fairness**: greedy packing favors small jobs; large jobs can starve
-  under sustained small-job arrival. A waiting-time-priority bump is the
-  planned fix.
+- **Single GPU, single node**: multi-GPU needs an NCCL-aware sharding and
+  placement layer; `cudaMemcpyPeer`/NCCL collectives are the next transport.
+- **GEMM stand-in only**: real inference would add a TensorRT engine path and
+  cuDNN ops behind the same `InferenceJob` interface.
+- **No MIG partitioning**: the safety margin is one scalar; MIG would need
+  per-instance budget discovery via NVML.
+- **Static safety margin**: 256 MiB by default; a future feedback controller
+  could adapt it from allocation-failure history.
 
 ## Documentation
 
-- `docs/DESIGN.md` — packing algorithm + complexity, stream-overlap model,
-  safety-margin choice, thread-safety argument
-- `docs/PROFILING.md` — profiling workflow and bottleneck analysis
-- `deploy/README.md` — the identical-workload-three-ways walkthrough
+- `docs/DESIGN.md` — packing algorithm + complexity, aging and reservation
+  accounting, stream-overlap model, safety-margin choice, thread safety
+- `docs/PROFILING.md` — nsys/ncu workflow, measured breakdown, bottleneck
+- `deploy/README.md` — deployment walkthrough and validation status
 - `deploy/k8s/README.md` — device plugin install and local testing

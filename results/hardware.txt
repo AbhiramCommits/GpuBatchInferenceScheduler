@@ -1,0 +1,6 @@
+GPU: Tesla T4 (compute capability 7.5)
+NVIDIA driver: 580.82.07
+CUDA runtime: 13.0
+CUDA toolkit: 13.0.88
+FP32 peak used: 8.1408 TFLOP/s (40 SMs x 64 FP32 lanes x 2 FLOP x 1.590 GHz)
+CPU baseline: NumPy 2.1.3, OpenBLAS 0.3.27, 2 threads on 2 vCPU (Intel Xeon @ 2.00 GHz)

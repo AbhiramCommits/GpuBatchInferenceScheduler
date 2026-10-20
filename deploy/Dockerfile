@@ -29,7 +29,7 @@ RUN python3 -m pip install --no-cache-dir scikit-build-core \
 # C++ binaries: benchmark harness + scheduler daemon
 RUN cmake -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CUDA_ARCHITECTURES="70;80;89" \
+      -DCMAKE_CUDA_ARCHITECTURES="75;80;89" \
       -DGBIS_BUILD_PYTHON_BINDINGS=OFF \
       -DGBIS_BUILD_TESTS=OFF \
     && cmake --build build -j \

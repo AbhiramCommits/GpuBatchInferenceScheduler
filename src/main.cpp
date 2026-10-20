@@ -1,5 +1,9 @@
+#include <algorithm>
+#include <cuda_runtime.h>
+
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -39,6 +43,7 @@ struct Config {
   int priority_levels = 4;
   int http_port = 8080;  // 0 disables the status server
   bool force_cpu = false;
+  bool stress = false;
   bool help = false;
 };
 
@@ -59,6 +64,8 @@ void print_usage(std::ostream& os) {
      << "  --job-batch-max <N> max internal batch per job (default 8)\n"
      << "  --http-port <N>    status server port, 0 disables (default 8080)\n"
      << "  --force-cpu        run without a GPU (jobs are dropped)\n"
+     << "  --stress           adversarial memory workload: queue several times\n"
+     << "                     the GPU's memory plus two oversized jobs\n"
      << "  --help              show this message\n";
 }
 
@@ -148,6 +155,8 @@ Config parse_args(int argc, char** argv) {
       cfg.http_port = parse_int("--http-port", option_value(argc, argv, i, "--http-port"));
     } else if (arg == "--force-cpu") {
       cfg.force_cpu = true;
+    } else if (arg == "--stress") {
+      cfg.stress = true;
     } else {
       throw std::runtime_error("unknown argument: " + arg);
     }
@@ -170,6 +179,11 @@ Config parse_args(int argc, char** argv) {
   if (cfg.jobs > 0 && !cfg.replay_csv.empty()) {
     throw std::runtime_error("use either --jobs or --replay, not both");
   }
+  if (cfg.stress && !cfg.replay_csv.empty()) {
+    throw std::runtime_error("--stress cannot be combined with --replay");
+  }
+  if (cfg.stress && cfg.jobs == 0)
+    cfg.jobs = 1000;
   return cfg;
 }
 
@@ -256,18 +270,72 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
     }
 
+    std::atomic<bool> generator_done{false};
     std::thread generator;
     if (cfg.replay_csv.empty()) {
-      generator = std::thread([&cfg, &sched] {
-        std::mt19937 rng(1234);
-        std::exponential_distribution<double> inter_arrival(
-            cfg.arrival_rate > 0.0 ? cfg.arrival_rate : 1.0);
-        for (std::uint64_t i = 1; i <= cfg.jobs && !g_interrupted.load(); ++i) {
-          sched.submit(make_job(i, cfg, rng));
-          if (cfg.arrival_rate > 0.0) {
-            std::this_thread::sleep_for(std::chrono::duration<double>(inter_arrival(rng)));
+      generator = std::thread([&cfg, &sched, &monitor, &generator_done] {
+        if (cfg.stress) {
+          const gbis::GpuStats stats = monitor.sample();
+          std::size_t total = stats.total_mem_bytes;
+          if (total == 0) {
+            std::size_t free_bytes = 0;
+            std::size_t total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess)
+              total = total_bytes;
+          }
+
+          constexpr int kOversized = 2;
+          constexpr int kBulkM = 768;
+          constexpr int kBulkN = 768;
+          constexpr int kBulkK = 768;
+          constexpr int kBulkBatch = 8;
+          constexpr int kOversizedBatch = 8;
+
+          // Square side length whose bytes_required() is ~1.25x the total
+          // device memory: 3*m*n*batch*4 = 12*m^2*batch for m=n=k.
+          const double bytes_per_side = 12.0 * kOversizedBatch;
+          int side = total > 0
+                         ? static_cast<int>(
+                               std::ceil(std::sqrt(static_cast<double>(total) / bytes_per_side) * 1.25))
+                         : 16000;
+          side = std::max(side, 1);
+
+          std::size_t queued_bytes = 0;
+          for (std::uint64_t i = 0; i < cfg.jobs && !g_interrupted.load(); ++i) {
+            gbis::InferenceJob job;
+            job.id = i + 1;
+            job.priority = 0;
+            if (static_cast<int>(i) < kOversized) {
+              job.m = job.n = job.k = side;
+              job.batch = kOversizedBatch;
+            } else {
+              job.m = kBulkM;
+              job.n = kBulkN;
+              job.k = kBulkK;
+              job.batch = kBulkBatch;
+            }
+            queued_bytes += job.bytes_required();
+            sched.submit(job);
+          }
+          const int oversized_jobs =
+              static_cast<int>(std::min<std::uint64_t>(kOversized, cfg.jobs));
+          std::cerr << "[stress] total_gpu_bytes=" << total
+                    << " queued_bytes=" << queued_bytes << " ratio="
+                    << (total > 0 ? static_cast<double>(queued_bytes) / total : 0.0)
+                    << " oversized_jobs=" << oversized_jobs << " oversized_side=" << side
+                    << "\n";
+        } else {
+          std::mt19937 rng(1234);
+          std::exponential_distribution<double> inter_arrival(
+              cfg.arrival_rate > 0.0 ? cfg.arrival_rate : 1.0);
+          for (std::uint64_t i = 1; i <= cfg.jobs && !g_interrupted.load(); ++i) {
+            sched.submit(make_job(i, cfg, rng));
+            if (cfg.arrival_rate > 0.0) {
+              std::this_thread::sleep_for(std::chrono::duration<double>(inter_arrival(rng)));
+            }
           }
         }
+        generator_done.store(true);
       });
     } else {
       for (const auto& job : replay_jobs) {
@@ -275,10 +343,15 @@ int main(int argc, char** argv) {
           break;
         sched.submit(job);
       }
+      generator_done.store(true);
     }
 
     while (!g_interrupted.load()) {
-      if (sched.submitted() > 0 && sched.queued() == 0 && sched.completed() >= sched.submitted()) {
+      // Do not treat a transiently empty queue as completion while the
+      // generator is still submitting (e.g. with --arrival-rate); otherwise
+      // stop() would drop the jobs that have not been submitted yet.
+      if (generator_done.load() && sched.submitted() > 0 && sched.queued() == 0 &&
+          sched.completed() >= sched.submitted()) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));

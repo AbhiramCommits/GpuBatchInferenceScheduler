@@ -97,6 +97,46 @@ TEST(PackingTest, GreedySelectsLargestCount) {
   EXPECT_EQ(remaining[0].id, 2u);
 }
 
+TEST(PackingTest, LargeJobDoesNotStarveUnderSmallJobStream) {
+  // One large job (48 bytes) fits in the budget, but a sustained stream of
+  // eight 12-byte small jobs per round fills max_batch every round. The
+  // size-only order used before aging never selects the large job.
+  auto large = make_job(1, 2, 2, 2, 1, 0);
+  large.seq = 0;
+  large.submit_time = InferenceJob::Clock::now() - std::chrono::seconds(10);
+
+  std::vector<InferenceJob> pending{large};
+  constexpr std::size_t kBudget = 96;  // 8 small jobs, or large + 4 small
+  constexpr int kMaxBatch = 8;
+  constexpr int kMaxRounds = 20;
+  std::uint64_t next_seq = 1;
+  bool large_selected = false;
+  int rounds = 0;
+
+  for (; rounds < kMaxRounds; ++rounds) {
+    for (int i = 0; i < 8; ++i) {
+      auto small = make_job(100 + next_seq, 1, 1, 1, 1, 0);
+      small.seq = next_seq++;
+      small.submit_time = InferenceJob::Clock::now();
+      pending.push_back(small);
+    }
+
+    std::vector<InferenceJob> selected;
+    std::vector<InferenceJob> remaining;
+    gbis::pack_jobs(pending, kBudget, kMaxBatch, selected, remaining);
+    for (const auto& job : selected) {
+      if (job.id == large.id)
+        large_selected = true;
+    }
+    if (large_selected)
+      break;
+    pending = std::move(remaining);
+  }
+
+  EXPECT_TRUE(large_selected) << "large job was not scheduled within " << kMaxRounds << " rounds";
+  EXPECT_LE(rounds, 5) << "large job took too many scheduling rounds";
+}
+
 TEST(PackingTest, SelectsAllWhenBudgetSufficient) {
   std::vector<InferenceJob> jobs = {
       make_job(0, 8, 8, 8, 1, 1), make_job(1, 8, 8, 8, 1, 0), make_job(2, 8, 8, 8, 1, 2)};

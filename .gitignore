@@ -27,6 +27,11 @@ scheduler_metrics.csv
 results/*
 !results/benchmark.csv
 !results/speedup.png
+!results/overlap.csv
+!results/hardware.txt
+!results/scheduler_stress.csv
+!results/profiling/
+!results/profiling/**
 
 # Python
 __pycache__/

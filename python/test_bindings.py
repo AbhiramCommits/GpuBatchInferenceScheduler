@@ -38,6 +38,54 @@ def test_gpu_batched_gemm_matches_numpy(shape):
     assert np.allclose(got, expected, rtol=1e-3, atol=1e-4)
 
 
+def _gemm_tolerance(a, b, k):
+    """Worst-case float32 dot-product error scale: 8 * u * K * max|A| * max|B|.
+
+    u is binary32 unit roundoff. Keeping the tolerance proportional to K catches
+    tile/indexing bugs (O(1) error) while allowing legitimate accumulation error.
+    """
+    u = np.finfo(np.float32).eps / 2.0
+    return 8.0 * u * k * float(np.abs(a).max()) * float(np.abs(b).max())
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 1, 1),
+        (64, 1, 1, 1),
+        (1, 31, 33, 1),
+        (64, 1, 31, 33),
+        (1, 31, 1, 257),
+        (64, 31, 1, 257),
+        (1, 33, 31, 1),
+        (64, 33, 31, 1),
+        (1, 257, 33, 31),
+        (64, 257, 33, 31),
+        (1, 1, 257, 1000),
+        (64, 1, 1, 1000),
+        (1, 1000, 1, 31),
+        (64, 1000, 1, 31),
+        (1, 1, 1000, 33),
+        (1, 33, 33, 1000),
+        (1, 1000, 1000, 1),
+        (1, 257, 257, 257),
+    ],
+)
+@requires_gpu
+@gpu
+def test_gpu_batched_gemm_matches_float64_reference(shape):
+    batch, m, n, k = shape
+    a = rng.uniform(-1.0, 1.0, (batch, m, k)).astype(np.float32)
+    b = rng.uniform(-1.0, 1.0, (batch, k, n)).astype(np.float32)
+    got = gpuinfer.batched_gemm(a, b)
+    expected = np.matmul(a.astype(np.float64), b.astype(np.float64))
+    tol = _gemm_tolerance(a, b, k)
+    assert got.shape == (batch, m, n)
+    assert np.isfinite(got).all()
+    err = np.abs(got.astype(np.float64) - expected)
+    assert err.max() <= tol, f"max abs err {err.max()} > tol {tol} for {shape}"
+
+
 @requires_gpu
 @gpu
 def test_gpu_batched_gemm_noncontiguous_input():

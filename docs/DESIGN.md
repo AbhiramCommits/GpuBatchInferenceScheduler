@@ -24,10 +24,17 @@ steady-state cost is negligible relative to kernel execution.
 
 The budget itself is `free_mem_bytes − safety_margin_bytes` (saturating at
 zero), sampled live from NVML each round, or a fixed value injected for
-tests. Because only the dispatcher packs — never the workers — two batches
-can never be simultaneously packed against the same free-memory snapshot,
-which is what guarantees the sum of all packed jobs stays within one
-budget's worth of headroom.
+tests. The dispatcher also subtracts the bytes reserved by batches it has
+packed but which have not finished yet. Without that reservation, it could
+pack many batches against the same NVML snapshot before workers had allocated
+their buffers; the reservation closes that window and prevents the scheduler
+from overcommitting against itself.
+
+NVML is only a snapshot: another process can take memory between the sample
+and `cudaMalloc`. Workers therefore allocate with bounded retry/backoff on
+`cudaErrorMemoryAllocation` before failing the batch. Jobs whose
+`bytes_required()` exceeds `total_memory − safety_margin` can never fit and
+are rejected once instead of being re-enqueued forever.
 
 ## The stream-overlap model
 

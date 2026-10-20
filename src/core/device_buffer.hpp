@@ -44,12 +44,24 @@ class DeviceBuffer {
     return *this;
   }
 
-  void allocate(std::size_t count) {
+  // Non-throwing allocation used by the scheduler's OOM retry path. Returns
+  // the cudaMalloc status; on failure the buffer is left empty.
+  cudaError_t try_allocate(std::size_t count) {
     release();
     if (count == 0)
-      return;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&data_), count * sizeof(T)));
+      return cudaSuccess;
+    const cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&data_), count * sizeof(T));
+    if (err != cudaSuccess) {
+      data_ = nullptr;
+      count_ = 0;
+      return err;
+    }
     count_ = count;
+    return cudaSuccess;
+  }
+
+  void allocate(std::size_t count) {
+    CUDA_CHECK(try_allocate(count));
   }
 
   void release() noexcept {

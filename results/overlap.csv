@@ -1,0 +1,7 @@
+impl,shape,jobs,config,transfer_ms,kernel_ms,total_ms,speedup_vs_pageable
+tiled,8x512x512x512,20,pageable_sync,5.782492,2.051806,7.988989,1.000000
+tiled,8x512x512x512,20,pinned_single_stream,2.037197,2.050342,4.098131,1.949423
+tiled,8x512x512x512,20,pinned_copy_compute,2.036069,2.047093,4.103546,1.946850
+tiled,8x1024x1024x1024,20,pageable_sync,22.688499,17.011757,39.691425,1.000000
+tiled,8x1024x1024x1024,20,pinned_single_stream,8.093526,18.144083,26.250043,1.512052
+tiled,8x1024x1024x1024,20,pinned_copy_compute,8.043682,18.214729,26.295236,1.509453

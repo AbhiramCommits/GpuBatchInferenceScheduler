@@ -93,6 +93,15 @@ class BatchScheduler {
   double mean_gpu_utilization() const {
     return monitor_.mean_utilization();
   }
+  std::uint64_t rejected_jobs() const {
+    return rejected_jobs_.load();
+  }
+  std::uint64_t oom_failures() const {
+    return oom_failures_.load();
+  }
+  std::uint64_t alloc_retries() const {
+    return alloc_retries_.load();
+  }
 
  private:
   void dispatcher_loop();
@@ -100,6 +109,10 @@ class BatchScheduler {
   void execute_batch(WorkerContext& ctx, const std::vector<InferenceJob>& batch);
   void fail_batch(const std::vector<InferenceJob>& batch, const std::string& reason);
   std::size_t budget_bytes() const;
+  std::size_t max_job_bytes() const;
+  std::size_t reserved_bytes() const;
+  void reserve_bytes(std::size_t bytes);
+  void release_bytes(std::size_t bytes);
 
   Options opts_;
   GpuMonitor monitor_;
@@ -112,17 +125,31 @@ class BatchScheduler {
   std::deque<std::vector<InferenceJob>> batch_queue_;
   std::mutex batch_mutex_;
   std::condition_variable batch_cv_;
+  std::condition_variable batch_space_cv_;
 
   std::thread dispatcher_;
   std::vector<std::thread> workers_;
 
   std::mutex lifecycle_mutex_;
   bool started_ = false;
-  bool shutdown_ = false;
+  // Written by stop() and read by the dispatcher/worker threads while they
+  // hold different mutexes, so it must be atomic.
+  std::atomic<bool> shutdown_{false};
   bool gpu_absent_ = false;
 
   std::atomic<std::uint64_t> submitted_{0};
   std::atomic<std::uint64_t> completed_{0};
+
+  // Bytes reserved by batches that have been packed but not yet finished.
+  // Subtracting this from the live free-memory budget prevents the dispatcher
+  // from queuing many batches against the same NVML snapshot.
+  mutable std::mutex budget_mutex_;
+  std::size_t reserved_bytes_ = 0;
+  std::size_t total_mem_bytes_ = 0;
+
+  std::atomic<std::uint64_t> rejected_jobs_{0};
+  std::atomic<std::uint64_t> oom_failures_{0};
+  std::atomic<std::uint64_t> alloc_retries_{0};
 
   mutable std::mutex metrics_mutex_;
   std::vector<JobMetrics> metrics_;

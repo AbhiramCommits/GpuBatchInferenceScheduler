@@ -1,0 +1,28 @@
+workload,metric,value,unit,notes
+normal_1000j_20ps,submitted,1000,count,2 workers
+normal_1000j_20ps,completed,1000,count,
+normal_1000j_20ps,failed,0,count,
+normal_1000j_20ps,throughput,19.362,jobs_per_s,
+normal_1000j_20ps,p50_e2e,33.628,ms,
+normal_1000j_20ps,p95_e2e,135.772,ms,
+normal_1000j_20ps,p99_e2e,188.888,ms,
+normal_1000j_20ps,mean_gpu_utilization,11.7,percent,NVML
+normal_1000j_20ps,cudaMalloc_failures,0,count,
+stress_6.63x,queued_bytes,106842366144,bytes,1000 queued jobs
+stress_6.63x,gpu_bytes,16106127360,bytes,
+stress_6.63x,queued_to_gpu_ratio,6.63,ratio,
+stress_6.63x,oversized_jobs,2,count,25166254176 bytes each
+stress_6.63x,max_job_bytes,15837691904,bytes,total minus 256 MiB margin
+stress_6.63x,executed_jobs,998,count,
+stress_6.63x,rejected_oversized,2,count,
+stress_6.63x,failed,2,count,oversized jobs
+stress_6.63x,cudaMalloc_failures,0,count,after retry
+stress_6.63x,throughput,12.172,jobs_per_s,
+stress_6.63x,p50_e2e,41841.782,ms,
+stress_6.63x,p95_e2e,78264.287,ms,
+stress_6.63x,p99_e2e,81598.585,ms,
+external_hog,submitted,24,count,1792^3 batch 8
+external_hog,completed,24,count,
+external_hog,failed,0,count,
+external_hog,cudaMalloc_retries,34,count,transient out-of-memory retries
+external_hog,cudaMalloc_failures,0,count,final failures

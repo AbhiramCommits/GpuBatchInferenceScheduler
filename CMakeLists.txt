@@ -10,7 +10,12 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # non-PIC code by default, which breaks that link.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(CMAKE_CUDA_ARCHITECTURES 70 80 89)
+# Respect an explicit -DCMAKE_CUDA_ARCHITECTURES (needed to build for the
+# actual GPU); otherwise emit a portable fat binary. sm_70 is omitted because
+# CUDA 13 dropped support for Volta and older.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 75 80 89)
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -45,6 +50,14 @@ target_link_libraries(gbis_sched PUBLIC
 add_executable(bench_gemm bench/bench_gemm.cpp)
 target_include_directories(bench_gemm PRIVATE src)
 target_link_libraries(bench_gemm PRIVATE gemm_tiled gemm_cublas CUDA::cudart)
+
+# Adversarial GPU-memory tenant and transfer/compute overlap benchmark.
+add_executable(gpu_memory_hog bench/gpu_memory_hog.cpp)
+target_link_libraries(gpu_memory_hog PRIVATE CUDA::cudart)
+
+add_executable(bench_overlap bench/bench_overlap.cpp)
+target_include_directories(bench_overlap PRIVATE src)
+target_link_libraries(bench_overlap PRIVATE gemm_tiled gemm_cublas CUDA::cudart)
 
 # HTTP status server for the daemon (cpp-httplib, header-only)
 include(FetchContent)
@@ -97,6 +110,10 @@ if(GBIS_BUILD_TESTS)
   add_executable(test_scheduler tests/test_scheduler.cpp)
   target_link_libraries(test_scheduler PRIVATE gbis_sched GTest::gtest_main)
 
+  add_executable(test_gemm tests/test_gemm.cpp)
+  target_link_libraries(test_gemm PRIVATE gemm_tiled gemm_cublas GTest::gtest_main CUDA::cudart)
+
   include(GoogleTest)
   gtest_discover_tests(test_scheduler)
+  gtest_discover_tests(test_gemm)
 endif()
