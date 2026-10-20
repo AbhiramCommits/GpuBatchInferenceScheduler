@@ -38,8 +38,7 @@ namespace {
 using gbis::DeviceBuffer;
 
 // Unit roundoff for binary32 round-to-nearest.
-constexpr double kUnitRoundoff =
-    0.5 * static_cast<double>(std::numeric_limits<float>::epsilon());
+constexpr double kUnitRoundoff = 0.5 * static_cast<double>(std::numeric_limits<float>::epsilon());
 
 struct Shape {
   int m;
@@ -49,8 +48,8 @@ struct Shape {
 };
 
 std::string shape_string(const Shape& s) {
-  return "m" + std::to_string(s.m) + "_n" + std::to_string(s.n) + "_k" +
-         std::to_string(s.k) + "_b" + std::to_string(s.batch);
+  return "m" + std::to_string(s.m) + "_n" + std::to_string(s.n) + "_k" + std::to_string(s.k) +
+         "_b" + std::to_string(s.batch);
 }
 
 // Awkward sizes: every dimension that matters to tiling/vectorisation, plus
@@ -174,8 +173,7 @@ TEST_P(GemmCorrectnessTest, MatchesFloat64Reference) {
   double max_abs_b = 0.0;
   cpu_reference(a, b, s.m, s.n, s.k, s.batch, ref, max_abs_a, max_abs_b);
 
-  const double tol =
-      8.0 * kUnitRoundoff * static_cast<double>(s.k) * max_abs_a * max_abs_b;
+  const double tol = 8.0 * kUnitRoundoff * static_cast<double>(s.k) * max_abs_a * max_abs_b;
 
   DeviceBuffer<float> da(sa), db(sb), dc(sc);
   CUDA_CHECK(cudaMemcpy(da.data(), a.data(), da.bytes(), cudaMemcpyHostToDevice));
@@ -211,15 +209,15 @@ TEST_P(GemmCorrectnessTest, MatchesFloat64Reference) {
                           << " ref=" << ref[worst] << " tol=" << tol;
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    Kernels,
-    GemmCorrectnessTest,
-    ::testing::Combine(::testing::Values(std::string("naive"),
-                                         std::string("tiled"),
-                                         std::string("cublas")),
-                       ::testing::ValuesIn(shapes())),
-    [](const ::testing::TestParamInfo<GemmCorrectnessTest::ParamType>& info) {
-      return std::get<0>(info.param) + "_" + shape_string(std::get<1>(info.param));
-    });
+INSTANTIATE_TEST_SUITE_P(Kernels,
+                         GemmCorrectnessTest,
+                         ::testing::Combine(::testing::Values(std::string("naive"),
+                                                              std::string("tiled"),
+                                                              std::string("cublas")),
+                                            ::testing::ValuesIn(shapes())),
+                         [](const ::testing::TestParamInfo<GemmCorrectnessTest::ParamType>& info) {
+                           return std::get<0>(info.param) + "_" +
+                                  shape_string(std::get<1>(info.param));
+                         });
 
 }  // namespace

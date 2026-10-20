@@ -1,6 +1,6 @@
-#include <algorithm>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -315,10 +315,9 @@ int main(int argc, char** argv) {
           // Square side length whose bytes_required() is ~1.25x the total
           // device memory: 3*m*n*batch*4 = 12*m^2*batch for m=n=k.
           const double bytes_per_side = 12.0 * kOversizedBatch;
-          int side = total > 0
-                         ? static_cast<int>(
-                               std::ceil(std::sqrt(static_cast<double>(total) / bytes_per_side) * 1.25))
-                         : 16000;
+          int side = total > 0 ? static_cast<int>(std::ceil(
+                                     std::sqrt(static_cast<double>(total) / bytes_per_side) * 1.25))
+                               : 16000;
           side = std::max(side, 1);
 
           std::size_t queued_bytes = 0;
@@ -340,11 +339,9 @@ int main(int argc, char** argv) {
           }
           const int oversized_jobs =
               static_cast<int>(std::min<std::uint64_t>(kOversized, cfg.jobs));
-          std::cerr << "[stress] total_gpu_bytes=" << total
-                    << " queued_bytes=" << queued_bytes << " ratio="
-                    << (total > 0 ? static_cast<double>(queued_bytes) / total : 0.0)
-                    << " oversized_jobs=" << oversized_jobs << " oversized_side=" << side
-                    << "\n";
+          std::cerr << "[stress] total_gpu_bytes=" << total << " queued_bytes=" << queued_bytes
+                    << " ratio=" << (total > 0 ? static_cast<double>(queued_bytes) / total : 0.0)
+                    << " oversized_jobs=" << oversized_jobs << " oversized_side=" << side << "\n";
         } else {
           std::mt19937 rng(1234);
           std::exponential_distribution<double> inter_arrival(
