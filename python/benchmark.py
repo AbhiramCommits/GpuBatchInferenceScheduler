@@ -68,10 +68,14 @@ def median(values):
 
 def gpu_name():
     try:
-        return subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            text=True,
-        ).strip().splitlines()[0]
+        return (
+            subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                text=True,
+            )
+            .strip()
+            .splitlines()[0]
+        )
     except Exception:
         return "unknown GPU"
 
@@ -118,7 +122,9 @@ def run_bench_gemm(bench, shape, impl, runs, warmup):
     header = next(
         csv.reader(
             io.StringIO(
-                [line for line in proc.stdout.splitlines() if line.startswith("impl,")][0]
+                [line for line in proc.stdout.splitlines() if line.startswith("impl,")][
+                    0
+                ]
             )
         )
     )
@@ -183,7 +189,9 @@ def write_plot(rows, peak_tflops, runs, png_path):
     pct = [r["tiled_pct_cublas_kernel"] for r in rows]
     colors = ["tab:red" if v < 50 else "tab:green" for v in pct]
     bars = ax2.bar(x, pct, color=colors)
-    ax2.axhline(100.0, color="black", linestyle="--", linewidth=1, label="cuBLAS = 100%")
+    ax2.axhline(
+        100.0, color="black", linestyle="--", linewidth=1, label="cuBLAS = 100%"
+    )
     ax2.bar_label(bars, fmt="%.0f%%", fontsize=8)
     ax2.set_ylim(0, max(110.0, max(pct) * 1.15))
     ax2.set_ylabel("tiled GFLOP/s as % of cuBLAS")
@@ -229,7 +237,9 @@ def main():
         help="add a shape (may be repeated)",
     )
     parser.add_argument("--runs", type=int, default=60, help="timed runs (default 60)")
-    parser.add_argument("--warmup", type=int, default=10, help="warmup runs (default 10)")
+    parser.add_argument(
+        "--warmup", type=int, default=10, help="warmup runs (default 10)"
+    )
     parser.add_argument(
         "--no-defaults",
         action="store_true",
@@ -286,10 +296,10 @@ def main():
     png_path = outdir / "speedup.png"
 
     threads = os.cpu_count() or 1
-    blas_limiter = None
+    _blas_limiter = None
     if threadpoolctl is not None:
         # Keep the controller alive so the limit applies for the whole run.
-        blas_limiter = threadpoolctl.threadpool_limits(limits=threads, user_api="blas")
+        _blas_limiter = threadpoolctl.threadpool_limits(limits=threads, user_api="blas")
     blas_name, blas_threads = blas_description()
 
     print(f"GPU: {gpu_name()}")
@@ -299,7 +309,10 @@ def main():
     )
     print(f"NumPy: {np.__version__} on {platform.platform()}")
     print(f"CPU BLAS: {blas_name}")
-    print(f"CPU threads used: {blas_threads} (requested {threads}, os.cpu_count={os.cpu_count()})")
+    print(
+        f"CPU threads used: {blas_threads} "
+        f"(requested {threads}, os.cpu_count={os.cpu_count()})"
+    )
     print(f"Timing: {args.warmup} warmup + median of {args.runs} timed runs")
     print()
 

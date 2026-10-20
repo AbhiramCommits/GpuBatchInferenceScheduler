@@ -86,9 +86,8 @@ class PinnedBuffer {
     release();
     if (count == 0)
       return;
-    CUDA_CHECK(
-        cudaHostAlloc(reinterpret_cast<void**>(&data_), count * sizeof(float),
-                      cudaHostAllocDefault));
+    CUDA_CHECK(cudaHostAlloc(
+        reinterpret_cast<void**>(&data_), count * sizeof(float), cudaHostAllocDefault));
     count_ = count;
   }
   void release() noexcept {
@@ -113,8 +112,7 @@ class PinnedBuffer {
 double median(std::vector<double> values) {
   std::sort(values.begin(), values.end());
   const std::size_t mid = values.size() / 2;
-  return values.size() % 2 == 1 ? values[mid]
-                                : 0.5 * (values[mid - 1] + values[mid]);
+  return values.size() % 2 == 1 ? values[mid] : 0.5 * (values[mid - 1] + values[mid]);
 }
 
 double elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
@@ -139,8 +137,8 @@ Shape parse_shape(const std::string& text) {
 }
 
 std::string shape_label(const Shape& s) {
-  return std::to_string(s.batch) + "x" + std::to_string(s.m) + "x" +
-         std::to_string(s.n) + "x" + std::to_string(s.k);
+  return std::to_string(s.batch) + "x" + std::to_string(s.m) + "x" + std::to_string(s.n) + "x" +
+         std::to_string(s.k);
 }
 
 Options parse_args(int argc, char** argv) {
@@ -237,10 +235,7 @@ struct Workspace {
   Event start, end, ev_h2d, ev_kern;
 };
 
-Result run_pageable(const Options& opt,
-                    const Shape& shape,
-                    const GemmFn gemm,
-                    Workspace& w) {
+Result run_pageable(const Options& opt, const Shape& shape, const GemmFn gemm, Workspace& w) {
   const std::size_t n = static_cast<std::size_t>(opt.jobs);
   std::vector<double> totals, h2d, kern, d2h;
   for (int rep = 0; rep < opt.warmup + opt.reps; ++rep) {
@@ -250,25 +245,28 @@ Result run_pageable(const Options& opt,
     for (std::size_t i = 0; i < n; ++i) {
       auto t0 = std::chrono::steady_clock::now();
       CUDA_CHECK(cudaMemcpy(
-          w.dev_a[i].data(), w.page_a[i].data(), w.sa[i] * sizeof(float),
-          cudaMemcpyHostToDevice));
+          w.dev_a[i].data(), w.page_a[i].data(), w.sa[i] * sizeof(float), cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(
-          w.dev_b[i].data(), w.page_b[i].data(), w.sb[i] * sizeof(float),
-          cudaMemcpyHostToDevice));
+          w.dev_b[i].data(), w.page_b[i].data(), w.sb[i] * sizeof(float), cudaMemcpyHostToDevice));
       auto t1 = std::chrono::steady_clock::now();
       h += std::chrono::duration<double, std::milli>(t1 - t0).count();
 
       CUDA_CHECK(cudaEventRecord(w.k0[i].get(), 0));
-      gemm(w.dev_a[i].data(), w.dev_b[i].data(), w.dev_c[i].data(), shape.m, shape.n, shape.k,
-           shape.batch, 0);
+      gemm(w.dev_a[i].data(),
+           w.dev_b[i].data(),
+           w.dev_c[i].data(),
+           shape.m,
+           shape.n,
+           shape.k,
+           shape.batch,
+           0);
       CUDA_CHECK(cudaEventRecord(w.k1[i].get(), 0));
       CUDA_CHECK(cudaEventSynchronize(w.k1[i].get()));
       ksum += elapsed_ms(w.k0[i].get(), w.k1[i].get());
 
       t0 = std::chrono::steady_clock::now();
       CUDA_CHECK(cudaMemcpy(
-          w.page_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float),
-          cudaMemcpyDeviceToHost));
+          w.page_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float), cudaMemcpyDeviceToHost));
       t1 = std::chrono::steady_clock::now();
       d += std::chrono::duration<double, std::milli>(t1 - t0).count();
     }
@@ -280,15 +278,13 @@ Result run_pageable(const Options& opt,
       d2h.push_back(d);
     }
   }
-  return Result{median(h2d) / static_cast<double>(n), median(kern) / static_cast<double>(n),
+  return Result{median(h2d) / static_cast<double>(n),
+                median(kern) / static_cast<double>(n),
                 median(d2h) / static_cast<double>(n),
                 median(totals) / static_cast<double>(n)};
 }
 
-Result run_pinned_single(const Options& opt,
-                         const Shape& shape,
-                         const GemmFn gemm,
-                         Workspace& w) {
+Result run_pinned_single(const Options& opt, const Shape& shape, const GemmFn gemm, Workspace& w) {
   const std::size_t n = static_cast<std::size_t>(opt.jobs);
   std::vector<double> totals, h2d, kern, d2h;
   for (int rep = 0; rep < opt.warmup + opt.reps; ++rep) {
@@ -296,21 +292,33 @@ Result run_pinned_single(const Options& opt,
     CUDA_CHECK(cudaEventRecord(w.start.get(), 0));
     for (std::size_t i = 0; i < n; ++i) {
       CUDA_CHECK(cudaEventRecord(w.c0[i].get(), 0));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_a[i].data(), w.pin_a[i].data(), w.sa[i] * sizeof(float),
-          cudaMemcpyHostToDevice, 0));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_b[i].data(), w.pin_b[i].data(), w.sb[i] * sizeof(float),
-          cudaMemcpyHostToDevice, 0));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_a[i].data(),
+                                 w.pin_a[i].data(),
+                                 w.sa[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 0));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_b[i].data(),
+                                 w.pin_b[i].data(),
+                                 w.sb[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 0));
       CUDA_CHECK(cudaEventRecord(w.c1[i].get(), 0));
       CUDA_CHECK(cudaEventRecord(w.k0[i].get(), 0));
-      gemm(w.dev_a[i].data(), w.dev_b[i].data(), w.dev_c[i].data(), shape.m, shape.n, shape.k,
-           shape.batch, 0);
+      gemm(w.dev_a[i].data(),
+           w.dev_b[i].data(),
+           w.dev_c[i].data(),
+           shape.m,
+           shape.n,
+           shape.k,
+           shape.batch,
+           0);
       CUDA_CHECK(cudaEventRecord(w.k1[i].get(), 0));
       CUDA_CHECK(cudaEventRecord(w.d0[i].get(), 0));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.pin_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float),
-          cudaMemcpyDeviceToHost, 0));
+      CUDA_CHECK(cudaMemcpyAsync(w.pin_c[i].data(),
+                                 w.dev_c[i].data(),
+                                 w.sc[i] * sizeof(float),
+                                 cudaMemcpyDeviceToHost,
+                                 0));
       CUDA_CHECK(cudaEventRecord(w.d1[i].get(), 0));
     }
     CUDA_CHECK(cudaEventRecord(w.end.get(), 0));
@@ -328,15 +336,13 @@ Result run_pinned_single(const Options& opt,
       d2h.push_back(d);
     }
   }
-  return Result{median(h2d) / static_cast<double>(n), median(kern) / static_cast<double>(n),
+  return Result{median(h2d) / static_cast<double>(n),
+                median(kern) / static_cast<double>(n),
                 median(d2h) / static_cast<double>(n),
                 median(totals) / static_cast<double>(n)};
 }
 
-Result run_pinned_overlap(const Options& opt,
-                          const Shape& shape,
-                          const GemmFn gemm,
-                          Workspace& w) {
+Result run_pinned_overlap(const Options& opt, const Shape& shape, const GemmFn gemm, Workspace& w) {
   const std::size_t n = static_cast<std::size_t>(opt.jobs);
   cudaStream_t copy = nullptr;
   cudaStream_t compute = nullptr;
@@ -349,27 +355,39 @@ Result run_pinned_overlap(const Options& opt,
     CUDA_CHECK(cudaEventRecord(w.start.get(), copy));
     for (std::size_t i = 0; i < n; ++i) {
       CUDA_CHECK(cudaEventRecord(w.c0[i].get(), copy));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_a[i].data(), w.pin_a[i].data(), w.sa[i] * sizeof(float),
-          cudaMemcpyHostToDevice, copy));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_b[i].data(), w.pin_b[i].data(), w.sb[i] * sizeof(float),
-          cudaMemcpyHostToDevice, copy));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_a[i].data(),
+                                 w.pin_a[i].data(),
+                                 w.sa[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 copy));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_b[i].data(),
+                                 w.pin_b[i].data(),
+                                 w.sb[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 copy));
       CUDA_CHECK(cudaEventRecord(w.c1[i].get(), copy));
       CUDA_CHECK(cudaEventRecord(w.ev_h2d.get(), copy));
       CUDA_CHECK(cudaStreamWaitEvent(compute, w.ev_h2d.get(), 0));
 
       CUDA_CHECK(cudaEventRecord(w.k0[i].get(), compute));
-      gemm(w.dev_a[i].data(), w.dev_b[i].data(), w.dev_c[i].data(), shape.m, shape.n, shape.k,
-           shape.batch, compute);
+      gemm(w.dev_a[i].data(),
+           w.dev_b[i].data(),
+           w.dev_c[i].data(),
+           shape.m,
+           shape.n,
+           shape.k,
+           shape.batch,
+           compute);
       CUDA_CHECK(cudaEventRecord(w.k1[i].get(), compute));
       CUDA_CHECK(cudaEventRecord(w.ev_kern.get(), compute));
       CUDA_CHECK(cudaStreamWaitEvent(copy, w.ev_kern.get(), 0));
 
       CUDA_CHECK(cudaEventRecord(w.d0[i].get(), copy));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.pin_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float),
-          cudaMemcpyDeviceToHost, copy));
+      CUDA_CHECK(cudaMemcpyAsync(w.pin_c[i].data(),
+                                 w.dev_c[i].data(),
+                                 w.sc[i] * sizeof(float),
+                                 cudaMemcpyDeviceToHost,
+                                 copy));
       CUDA_CHECK(cudaEventRecord(w.d1[i].get(), copy));
     }
     CUDA_CHECK(cudaEventRecord(w.end.get(), copy));
@@ -389,7 +407,8 @@ Result run_pinned_overlap(const Options& opt,
   }
   CUDA_CHECK(cudaStreamDestroy(copy));
   CUDA_CHECK(cudaStreamDestroy(compute));
-  return Result{median(h2d) / static_cast<double>(n), median(kern) / static_cast<double>(n),
+  return Result{median(h2d) / static_cast<double>(n),
+                median(kern) / static_cast<double>(n),
                 median(d2h) / static_cast<double>(n),
                 median(totals) / static_cast<double>(n)};
 }
@@ -415,12 +434,16 @@ Result run_pinned_double_buffer(const Options& opt,
     // k0/k1 time the kernel; k1 is also the event the D2H stream waits on.
     const auto enqueue_h2d = [&](std::size_t i) {
       CUDA_CHECK(cudaEventRecord(w.c0[i].get(), h2d));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_a[i].data(), w.pin_a[i].data(), w.sa[i] * sizeof(float),
-          cudaMemcpyHostToDevice, h2d));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.dev_b[i].data(), w.pin_b[i].data(), w.sb[i] * sizeof(float),
-          cudaMemcpyHostToDevice, h2d));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_a[i].data(),
+                                 w.pin_a[i].data(),
+                                 w.sa[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 h2d));
+      CUDA_CHECK(cudaMemcpyAsync(w.dev_b[i].data(),
+                                 w.pin_b[i].data(),
+                                 w.sb[i] * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 h2d));
       CUDA_CHECK(cudaEventRecord(w.c1[i].get(), h2d));
     };
 
@@ -428,15 +451,23 @@ Result run_pinned_double_buffer(const Options& opt,
     for (std::size_t i = 0; i < n; ++i) {
       CUDA_CHECK(cudaStreamWaitEvent(compute, w.c1[i].get(), 0));
       CUDA_CHECK(cudaEventRecord(w.k0[i].get(), compute));
-      gemm(w.dev_a[i].data(), w.dev_b[i].data(), w.dev_c[i].data(), shape.m, shape.n, shape.k,
-           shape.batch, compute);
+      gemm(w.dev_a[i].data(),
+           w.dev_b[i].data(),
+           w.dev_c[i].data(),
+           shape.m,
+           shape.n,
+           shape.k,
+           shape.batch,
+           compute);
       CUDA_CHECK(cudaEventRecord(w.k1[i].get(), compute));
 
       CUDA_CHECK(cudaStreamWaitEvent(d2h, w.k1[i].get(), 0));
       CUDA_CHECK(cudaEventRecord(w.d0[i].get(), d2h));
-      CUDA_CHECK(cudaMemcpyAsync(
-          w.pin_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float),
-          cudaMemcpyDeviceToHost, d2h));
+      CUDA_CHECK(cudaMemcpyAsync(w.pin_c[i].data(),
+                                 w.dev_c[i].data(),
+                                 w.sc[i] * sizeof(float),
+                                 cudaMemcpyDeviceToHost,
+                                 d2h));
       CUDA_CHECK(cudaEventRecord(w.d1[i].get(), d2h));
 
       if (i + 1 < n)
@@ -460,7 +491,8 @@ Result run_pinned_double_buffer(const Options& opt,
   CUDA_CHECK(cudaStreamDestroy(h2d));
   CUDA_CHECK(cudaStreamDestroy(compute));
   CUDA_CHECK(cudaStreamDestroy(d2h));
-  return Result{median(h2d_ms) / static_cast<double>(n), median(kern) / static_cast<double>(n),
+  return Result{median(h2d_ms) / static_cast<double>(n),
+                median(kern) / static_cast<double>(n),
                 median(d2h_ms) / static_cast<double>(n),
                 median(totals) / static_cast<double>(n)};
 }
@@ -538,15 +570,14 @@ int main(int argc, char** argv) {
       const Result pinned3 = run_pinned_double_buffer(opt, shape, gemm, w);
 
       const Result results[4] = {pageable, pinned1, pinned2, pinned3};
-      const char* names[4] = {"pageable_sync", "pinned_single_stream", "pinned_copy_compute",
-                              "pinned_double_buffer"};
+      const char* names[4] = {
+          "pageable_sync", "pinned_single_stream", "pinned_copy_compute", "pinned_double_buffer"};
       double base_total = pageable.total_ms;
       for (int c = 0; c < 4; ++c) {
         const double speedup = base_total > 0.0 ? base_total / results[c].total_ms : 0.0;
-        std::cout << opt.impl << ',' << shape_label(shape) << ',' << opt.jobs << ','
-                  << names[c] << ',' << results[c].h2d_ms + results[c].d2h_ms << ','
-                  << results[c].kernel_ms << ',' << results[c].total_ms << ',' << speedup
-                  << '\n';
+        std::cout << opt.impl << ',' << shape_label(shape) << ',' << opt.jobs << ',' << names[c]
+                  << ',' << results[c].h2d_ms + results[c].d2h_ms << ',' << results[c].kernel_ms
+                  << ',' << results[c].total_ms << ',' << speedup << '\n';
       }
     }
     return EXIT_SUCCESS;

@@ -28,8 +28,8 @@ struct Options {
   int n = 512;
   int k = 512;
   int batch = 8;
-  int iters = 50;    // timed runs (median reported)
-  int warmup = 10;   // untimed warmup runs
+  int iters = 50;   // timed runs (median reported)
+  int warmup = 10;  // untimed warmup runs
   std::string impl = "tiled";
   bool skip_check = false;
   bool help = false;
@@ -297,9 +297,9 @@ int run_benchmark(const Options& opt) {
   std::cout << "impl,m,n,k,batch,iters,warmup,h2d_ms,kernel_ms,d2h_ms,total_ms,"
                "kernel_gflops,e2e_gflops,cpu_ms,cpu_gflops,speedup_vs_cpu,max_abs_err\n";
   std::cout << opt.impl << ',' << opt.m << ',' << opt.n << ',' << opt.k << ',' << opt.batch << ','
-            << opt.iters << ',' << opt.warmup << ',' << h2d_ms << ',' << kernel_ms << ','
-            << d2h_ms << ',' << total_ms << ',' << kernel_gflops << ',' << e2e_gflops << ','
-            << cpu_ms << ',' << cpu_gflops << ',' << speedup << ',' << max_err << '\n';
+            << opt.iters << ',' << opt.warmup << ',' << h2d_ms << ',' << kernel_ms << ',' << d2h_ms
+            << ',' << total_ms << ',' << kernel_gflops << ',' << e2e_gflops << ',' << cpu_ms << ','
+            << cpu_gflops << ',' << speedup << ',' << max_err << '\n';
 
   if (!opt.skip_check && max_err >= kTolerance) {
     std::cerr << "error: max abs error " << max_err << " >= tolerance " << kTolerance << "\n";
