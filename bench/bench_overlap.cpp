@@ -3,8 +3,10 @@
 // Compares, for the same jobs and the same tiled/cuBLAS kernel:
 //   pageable  : pageable host memory, one stream, synchronous cudaMemcpy
 //   pinned1   : pinned host memory, cudaMemcpyAsync, one stream (serialized)
-//   pinned2   : pinned host memory, copy stream + compute stream with events,
-//               using the same dependency order as BatchScheduler::execute_batch
+//   pinned2   : pinned host memory, one copy stream + one compute stream,
+//               with H2D_i -> K_i -> D2H_i serialized on the copy stream
+//   pinned3   : pinned host memory, separate H2D / compute / D2H streams;
+//               H2D_{i+1} is issued while K_i runs (double buffering)
 //
 // Reports per-job H2D+D2H, kernel, and end-to-end time (median of --reps
 // timed sequences after --warmup warmups).
@@ -392,6 +394,77 @@ Result run_pinned_overlap(const Options& opt,
                 median(totals) / static_cast<double>(n)};
 }
 
+Result run_pinned_double_buffer(const Options& opt,
+                                const Shape& shape,
+                                const GemmFn gemm,
+                                Workspace& w) {
+  const std::size_t n = static_cast<std::size_t>(opt.jobs);
+  cudaStream_t h2d = nullptr;
+  cudaStream_t compute = nullptr;
+  cudaStream_t d2h = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&h2d, cudaStreamNonBlocking));
+  CUDA_CHECK(cudaStreamCreate(&compute));
+  CUDA_CHECK(cudaStreamCreateWithFlags(&d2h, cudaStreamNonBlocking));
+
+  std::vector<double> totals, h2d_ms, kern, d2h_ms;
+  for (int rep = 0; rep < opt.warmup + opt.reps; ++rep) {
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaEventRecord(w.start.get(), h2d));
+
+    // c0/c1 time H2D; c1 is also the event the compute stream waits on.
+    // k0/k1 time the kernel; k1 is also the event the D2H stream waits on.
+    const auto enqueue_h2d = [&](std::size_t i) {
+      CUDA_CHECK(cudaEventRecord(w.c0[i].get(), h2d));
+      CUDA_CHECK(cudaMemcpyAsync(
+          w.dev_a[i].data(), w.pin_a[i].data(), w.sa[i] * sizeof(float),
+          cudaMemcpyHostToDevice, h2d));
+      CUDA_CHECK(cudaMemcpyAsync(
+          w.dev_b[i].data(), w.pin_b[i].data(), w.sb[i] * sizeof(float),
+          cudaMemcpyHostToDevice, h2d));
+      CUDA_CHECK(cudaEventRecord(w.c1[i].get(), h2d));
+    };
+
+    enqueue_h2d(0);
+    for (std::size_t i = 0; i < n; ++i) {
+      CUDA_CHECK(cudaStreamWaitEvent(compute, w.c1[i].get(), 0));
+      CUDA_CHECK(cudaEventRecord(w.k0[i].get(), compute));
+      gemm(w.dev_a[i].data(), w.dev_b[i].data(), w.dev_c[i].data(), shape.m, shape.n, shape.k,
+           shape.batch, compute);
+      CUDA_CHECK(cudaEventRecord(w.k1[i].get(), compute));
+
+      CUDA_CHECK(cudaStreamWaitEvent(d2h, w.k1[i].get(), 0));
+      CUDA_CHECK(cudaEventRecord(w.d0[i].get(), d2h));
+      CUDA_CHECK(cudaMemcpyAsync(
+          w.pin_c[i].data(), w.dev_c[i].data(), w.sc[i] * sizeof(float),
+          cudaMemcpyDeviceToHost, d2h));
+      CUDA_CHECK(cudaEventRecord(w.d1[i].get(), d2h));
+
+      if (i + 1 < n)
+        enqueue_h2d(i + 1);
+    }
+    CUDA_CHECK(cudaEventRecord(w.end.get(), d2h));
+    CUDA_CHECK(cudaEventSynchronize(w.end.get()));
+    double h = 0.0, ksum = 0.0, d = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      h += elapsed_ms(w.c0[i].get(), w.c1[i].get());
+      ksum += elapsed_ms(w.k0[i].get(), w.k1[i].get());
+      d += elapsed_ms(w.d0[i].get(), w.d1[i].get());
+    }
+    if (rep >= opt.warmup) {
+      totals.push_back(elapsed_ms(w.start.get(), w.end.get()));
+      h2d_ms.push_back(h);
+      kern.push_back(ksum);
+      d2h_ms.push_back(d);
+    }
+  }
+  CUDA_CHECK(cudaStreamDestroy(h2d));
+  CUDA_CHECK(cudaStreamDestroy(compute));
+  CUDA_CHECK(cudaStreamDestroy(d2h));
+  return Result{median(h2d_ms) / static_cast<double>(n), median(kern) / static_cast<double>(n),
+                median(d2h_ms) / static_cast<double>(n),
+                median(totals) / static_cast<double>(n)};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -462,11 +535,13 @@ int main(int argc, char** argv) {
       const Result pageable = run_pageable(opt, shape, gemm, w);
       const Result pinned1 = run_pinned_single(opt, shape, gemm, w);
       const Result pinned2 = run_pinned_overlap(opt, shape, gemm, w);
+      const Result pinned3 = run_pinned_double_buffer(opt, shape, gemm, w);
 
-      const Result results[3] = {pageable, pinned1, pinned2};
-      const char* names[3] = {"pageable_sync", "pinned_single_stream", "pinned_copy_compute"};
+      const Result results[4] = {pageable, pinned1, pinned2, pinned3};
+      const char* names[4] = {"pageable_sync", "pinned_single_stream", "pinned_copy_compute",
+                              "pinned_double_buffer"};
       double base_total = pageable.total_ms;
-      for (int c = 0; c < 3; ++c) {
+      for (int c = 0; c < 4; ++c) {
         const double speedup = base_total > 0.0 ? base_total / results[c].total_ms : 0.0;
         std::cout << opt.impl << ',' << shape_label(shape) << ',' << opt.jobs << ','
                   << names[c] << ',' << results[c].h2d_ms + results[c].d2h_ms << ','

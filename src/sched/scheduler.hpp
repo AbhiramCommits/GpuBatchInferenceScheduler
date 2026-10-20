@@ -37,9 +37,10 @@ void fill_matrices(const InferenceJob& job, float* a, float* b);
 // Thread-safe batch scheduler: a priority queue (std::priority_queue +
 // mutex + condition_variable) fed by submit(), a dispatcher that packs
 // queued jobs against the free-GPU-memory budget (NVML free memory minus a
-// safety margin), and a pool of worker threads, each with its own copy and
-// compute cudaStream_t, executing packed batches with the tiled or cuBLAS
-// batched GEMM kernels.
+// safety margin), and a pool of worker threads, each with its own H2D,
+// compute, and D2H cudaStream_t, executing packed batches with the tiled or
+// cuBLAS batched GEMM kernels. Per-worker copies are double-buffered: H2D for
+// the next job is issued while the current kernel runs.
 class BatchScheduler {
  public:
   struct Options {

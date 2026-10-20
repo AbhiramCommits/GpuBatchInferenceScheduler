@@ -31,6 +31,7 @@ extern "C" void on_sigint(int) {
 struct Config {
   std::uint64_t jobs = 0;     // 0 + no --replay => serve until SIGINT
   double arrival_rate = 0.0;  // jobs/sec, poisson (0 => submit all at once)
+  bool saturation = false;    // backlogged submission, for max-throughput runs
   std::string replay_csv;
   int max_batch = 8;
   int workers = 2;
@@ -53,6 +54,8 @@ void print_usage(std::ostream& os) {
      << "Options:\n"
      << "  --jobs <N>          synthetic jobs to generate\n"
      << "  --arrival-rate <R>  poisson arrival rate in jobs/sec (default 0)\n"
+     << "  --saturation        submit all --jobs at once (open-loop backlog);\n"
+     << "                      use with --jobs N to measure peak throughput\n"
      << "  --replay <csv>      replay jobs from CSV (id,m,n,k,batch,priority)\n"
      << "  --max-batch <N>     jobs per packed batch (default 8)\n"
      << "  --workers <N>       worker threads / streams (default 2)\n"
@@ -123,6 +126,7 @@ std::string option_value(int argc, char** argv, int& i, const std::string& name)
 
 Config parse_args(int argc, char** argv) {
   Config cfg;
+  bool arrival_rate_given = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--help" || arg == "-h") {
@@ -132,6 +136,9 @@ Config parse_args(int argc, char** argv) {
     } else if (arg == "--arrival-rate" || arg.rfind("--arrival-rate=", 0) == 0) {
       cfg.arrival_rate =
           parse_double("--arrival-rate", option_value(argc, argv, i, "--arrival-rate"));
+      arrival_rate_given = true;
+    } else if (arg == "--saturation") {
+      cfg.saturation = true;
     } else if (arg == "--replay" || arg.rfind("--replay=", 0) == 0) {
       cfg.replay_csv = option_value(argc, argv, i, "--replay");
     } else if (arg == "--max-batch" || arg.rfind("--max-batch=", 0) == 0) {
@@ -170,6 +177,20 @@ Config parse_args(int argc, char** argv) {
   }
   if (cfg.arrival_rate < 0.0)
     throw std::runtime_error("--arrival-rate must be >= 0");
+  if (cfg.saturation && arrival_rate_given)
+    throw std::runtime_error("use either --saturation or --arrival-rate, not both");
+  if (cfg.saturation && !cfg.replay_csv.empty())
+    throw std::runtime_error("--saturation cannot be combined with --replay");
+  if (cfg.saturation && cfg.stress)
+    throw std::runtime_error("--saturation cannot be combined with --stress");
+  if (cfg.saturation) {
+    // Open-loop backlog: submit every job as fast as the generator can
+    // enqueue it, so the achieved service rate is measured, not the offered
+    // Poisson rate.
+    cfg.arrival_rate = 0.0;
+    if (cfg.jobs == 0)
+      cfg.jobs = 1000;
+  }
   if (cfg.http_port < 0 || cfg.http_port > 65535) {
     throw std::runtime_error("--http-port must be in [0, 65535]");
   }
@@ -328,6 +349,11 @@ int main(int argc, char** argv) {
           std::mt19937 rng(1234);
           std::exponential_distribution<double> inter_arrival(
               cfg.arrival_rate > 0.0 ? cfg.arrival_rate : 1.0);
+          if (cfg.saturation) {
+            std::cerr << "[saturation] submitting " << cfg.jobs
+                      << " jobs with no inter-arrival delay (workers=" << cfg.workers
+                      << " max_batch=" << cfg.max_batch << ")\n";
+          }
           for (std::uint64_t i = 1; i <= cfg.jobs && !g_interrupted.load(); ++i) {
             sched.submit(make_job(i, cfg, rng));
             if (cfg.arrival_rate > 0.0) {

@@ -128,10 +128,17 @@ constexpr std::int64_t kAgingIntervalMs = 1000;
 }  // namespace
 
 struct WorkerContext {
-  cudaStream_t copy_stream = nullptr;
+  // Transfers are split so the next job's H2D can run while the current
+  // kernel executes and the previous job's D2H drains on its own stream.
+  cudaStream_t h2d_stream = nullptr;
   cudaStream_t compute_stream = nullptr;
-  CudaEvent ev_h2d;
-  CudaEvent ev_kern;
+  cudaStream_t d2h_stream = nullptr;
+
+  // Event pool sized to the largest batch this worker has seen. Reusing
+  // events across batches avoids per-job cudaEventCreate/Destroy churn.
+  std::vector<CudaEvent> h2d_done;
+  std::vector<CudaEvent> kern_done;
+  std::vector<CudaEvent> done;
 };
 
 bool pack_jobs(const std::vector<InferenceJob>& candidates,
@@ -509,10 +516,12 @@ void BatchScheduler::worker_loop() {
     release_bytes(batch_bytes);
   }
   if (ctx) {
-    if (ctx->copy_stream != nullptr)
-      cudaStreamDestroy(ctx->copy_stream);
+    if (ctx->h2d_stream != nullptr)
+      cudaStreamDestroy(ctx->h2d_stream);
     if (ctx->compute_stream != nullptr)
       cudaStreamDestroy(ctx->compute_stream);
+    if (ctx->d2h_stream != nullptr)
+      cudaStreamDestroy(ctx->d2h_stream);
   }
 }
 
@@ -524,13 +533,21 @@ void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<Inferen
     PinnedHostBuffer<float> ha;
     PinnedHostBuffer<float> hb;
     PinnedHostBuffer<float> hc;
-    CudaEvent done;
     InferenceJob::TimePoint pickup{};
   };
 
-  if (ctx.copy_stream == nullptr) {
-    CUDA_CHECK(cudaStreamCreateWithFlags(&ctx.copy_stream, cudaStreamNonBlocking));
+  if (ctx.h2d_stream == nullptr) {
+    CUDA_CHECK(cudaStreamCreateWithFlags(&ctx.h2d_stream, cudaStreamNonBlocking));
     CUDA_CHECK(cudaStreamCreate(&ctx.compute_stream));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&ctx.d2h_stream, cudaStreamNonBlocking));
+  }
+
+  // Events are distinct within a batch (the host records and awaits them out
+  // of order) but recycled once the previous batch has completed.
+  if (ctx.h2d_done.size() < batch.size()) {
+    ctx.h2d_done.resize(batch.size());
+    ctx.kern_done.resize(batch.size());
+    ctx.done.resize(batch.size());
   }
 
   std::vector<JobBuffers> execs(batch.size());
@@ -591,18 +608,29 @@ void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<Inferen
                                cudaGetErrorString(alloc_err));
     }
 
-    for (std::size_t i = 0; i < batch.size(); ++i) {
+    // Double-buffered pipeline: H2D for job i+1 is issued on its own stream
+    // while job i is running, so it overlaps K_i instead of waiting behind
+    // D2H_i. D2H has a third stream, so it does not block the next H2D
+    // either. Each job's buffers are distinct, giving the pipeline multiple
+    // in-flight buffer sets.
+    const auto enqueue_h2d = [&](std::size_t i) {
       const auto& job = batch[i];
       auto& e = execs[i];
       fill_matrices(job, e.ha.data(), e.hb.data());
       e.pickup = InferenceJob::Clock::now();
+      CUDA_CHECK(cudaMemcpyAsync(
+          e.da.data(), e.ha.data(), e.da.bytes(), cudaMemcpyHostToDevice, ctx.h2d_stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          e.db.data(), e.hb.data(), e.db.bytes(), cudaMemcpyHostToDevice, ctx.h2d_stream));
+      CUDA_CHECK(cudaEventRecord(ctx.h2d_done[i].get(), ctx.h2d_stream));
+    };
 
-      CUDA_CHECK(cudaMemcpyAsync(
-          e.da.data(), e.ha.data(), e.da.bytes(), cudaMemcpyHostToDevice, ctx.copy_stream));
-      CUDA_CHECK(cudaMemcpyAsync(
-          e.db.data(), e.hb.data(), e.db.bytes(), cudaMemcpyHostToDevice, ctx.copy_stream));
-      CUDA_CHECK(cudaEventRecord(ctx.ev_h2d.get(), ctx.copy_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(ctx.compute_stream, ctx.ev_h2d.get(), 0));
+    enqueue_h2d(0);
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const auto& job = batch[i];
+      auto& e = execs[i];
+
+      CUDA_CHECK(cudaStreamWaitEvent(ctx.compute_stream, ctx.h2d_done[i].get(), 0));
       if (opts_.impl == "cublas") {
         gemm_cublas_batched(e.da.data(),
                             e.db.data(),
@@ -622,11 +650,17 @@ void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<Inferen
                            job.batch,
                            ctx.compute_stream);
       }
-      CUDA_CHECK(cudaEventRecord(ctx.ev_kern.get(), ctx.compute_stream));
-      CUDA_CHECK(cudaStreamWaitEvent(ctx.copy_stream, ctx.ev_kern.get(), 0));
+      CUDA_CHECK(cudaEventRecord(ctx.kern_done[i].get(), ctx.compute_stream));
+
+      CUDA_CHECK(cudaStreamWaitEvent(ctx.d2h_stream, ctx.kern_done[i].get(), 0));
       CUDA_CHECK(cudaMemcpyAsync(
-          e.hc.data(), e.dc.data(), e.dc.bytes(), cudaMemcpyDeviceToHost, ctx.copy_stream));
-      CUDA_CHECK(cudaEventRecord(e.done.get(), ctx.copy_stream));
+          e.hc.data(), e.dc.data(), e.dc.bytes(), cudaMemcpyDeviceToHost, ctx.d2h_stream));
+      CUDA_CHECK(cudaEventRecord(ctx.done[i].get(), ctx.d2h_stream));
+
+      // Queue the next H2D after D2H_i is on the wire, so a slow host fill
+      // cannot delay the current job's result copy.
+      if (i + 1 < batch.size())
+        enqueue_h2d(i + 1);
     }
 
     std::vector<JobMetrics> out;
@@ -634,7 +668,7 @@ void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<Inferen
     for (std::size_t i = 0; i < batch.size(); ++i) {
       const auto& job = batch[i];
       auto& e = execs[i];
-      CUDA_CHECK(cudaEventSynchronize(e.done.get()));
+      CUDA_CHECK(cudaEventSynchronize(ctx.done[i].get()));
       const auto finish = InferenceJob::Clock::now();
       JobMetrics m;
       m.job_id = job.id;
@@ -658,6 +692,10 @@ void BatchScheduler::execute_batch(WorkerContext& ctx, const std::vector<Inferen
     completed_.fetch_add(out.size(), std::memory_order_relaxed);
   } catch (const std::exception& ex) {
     std::cerr << "[scheduler] batch execution failed: " << ex.what() << "\n";
+    // The worker reuses its streams and event pool for the next batch, so
+    // drain any work from this failed batch before returning. Ignore the
+    // status here: the original exception is the useful error.
+    cudaDeviceSynchronize();
     fail_batch(batch, ex.what());
   }
 }

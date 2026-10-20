@@ -227,6 +227,9 @@ TEST(SchedulerTest, GpuResultsMatchCpuReference) {
     opts.impl = impl;
     opts.num_workers = 2;
     opts.retain_results = true;
+    // Force more than one packed batch so the pipelined streams are exercised
+    // across a batch boundary, not just within a single batch.
+    opts.max_batch = 2;
     opts.fixed_budget_bytes = 1ull << 30;
     BatchScheduler sched(opts);
     sched.start();

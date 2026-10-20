@@ -15,6 +15,7 @@
 #   M N K BATCH ITERS IMPL WARMUP      GEMM parameters
 #   SKIP_CHECK 1 to skip the CPU reference during GEMM profiling
 #   JOBS ARRIVAL_RATE WORKERS          scheduler parameters
+#                                       (ARRIVAL_RATE=0 => open-loop backlog)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

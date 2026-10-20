@@ -8,6 +8,16 @@ normal_1000j_20ps,p95_e2e,135.772,ms,
 normal_1000j_20ps,p99_e2e,188.888,ms,
 normal_1000j_20ps,mean_gpu_utilization,11.7,percent,NVML
 normal_1000j_20ps,cudaMalloc_failures,0,count,
+saturated_1000j,offered_rate,0,jobs_per_s,open-loop backlog; 2 workers
+saturated_1000j,submitted,1000,count,2 workers
+saturated_1000j,completed,1000,count,max_batch=8
+saturated_1000j,failed,0,count,
+saturated_1000j,throughput,45.348,jobs_per_s,
+saturated_1000j,p50_e2e,4319.564,ms,
+saturated_1000j,p95_e2e,18357.636,ms,
+saturated_1000j,p99_e2e,21376.414,ms,
+saturated_1000j,mean_gpu_utilization,24.0,percent,NVML
+saturated_1000j,cudaMalloc_failures,0,count,
 stress_6.63x,queued_bytes,106842366144,bytes,1000 queued jobs
 stress_6.63x,gpu_bytes,16106127360,bytes,
 stress_6.63x,queued_to_gpu_ratio,6.63,ratio,

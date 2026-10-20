@@ -118,6 +118,7 @@ kubectl logs job/gpu-benchmark
 ```
 --jobs N            synthetic jobs (0 = serve until SIGINT)
 --arrival-rate R    poisson arrivals in jobs/sec
+--saturation        submit all jobs at once for a peak-throughput run
 --replay <csv>      replay jobs from CSV
 --max-batch N       jobs per packed batch
 --workers N         worker threads / streams

@@ -38,26 +38,40 @@ are rejected once instead of being re-enqueued forever.
 
 ## The stream-overlap model
 
-Each worker thread owns exactly two CUDA streams and one pair of events:
+Each worker thread owns three CUDA streams:
 
-- a **copy stream** (non-blocking) for H2D and D2H `cudaMemcpyAsync` calls
-  from pinned host buffers (`cudaHostAlloc`), and
-- a **compute stream** for the GEMM kernel launches.
+- an **H2D stream** (non-blocking) for host-to-device `cudaMemcpyAsync` calls
+  from pinned host buffers (`cudaHostAlloc`),
+- a **compute stream** for the GEMM kernel launches, and
+- a **D2H stream** (non-blocking) for device-to-host result copies.
 
-Per job in a packed batch the worker issues:
+Each job has its own pinned/device buffer set, so job *i+1* can be filled and
+copied while job *i* is still using its buffers. Per job in a packed batch the
+worker issues:
 
 ```text
-copy:    H2D(A), H2D(B) ── record(ev_h2d)
-compute: wait(ev_h2d) ── kernel ── record(ev_kern)
-copy:    wait(ev_kern) ── D2H(C) ── record(ev_done[i])
+h2d:     H2D(A_i), H2D(B_i) ── record(h2d_done_i)
+compute: wait(h2d_done_i) ── K_i ── record(kern_done_i)
+d2h:     wait(kern_done_i) ── D2H(C_i) ── record(done_i)
+h2d:     H2D(A_{i+1}), H2D(B_{i+1}) ── record(h2d_done_{i+1})
 ```
 
-Because the streams are different, the H2D of job *i+1* (copy stream) runs
-concurrently with the kernel of job *i* (compute stream); the events form
-the producer/consumer edges. The host thread never blocks on a synchronous
-copy — pinned memory makes every transfer DMA-capable and asynchronous.
-Per-job completion is observed with one `cudaEventSynchronize(ev_done[i])`
-per job (events complete in order, so this is O(1) each).
+The host enqueues `H2D_{i+1}` immediately after `D2H_i`, before it waits for
+`K_i` to finish. Because H2D and D2H are separate streams, `D2H_i` does not
+block `H2D_{i+1}`, and `H2D_{i+1}` can run during `K_i`. The previous
+single-copy-stream version enqueued `H2D_{i+1}` behind `D2H_i`; since `D2H_i`
+waited on `K_i`, the next transfer could not overlap the kernel, which is why
+the measured single-stream and split-stream configurations were identical.
+
+The host thread never blocks on a synchronous copy — pinned memory makes every
+transfer DMA-capable and asynchronous. Host-side `fill_matrices` for job *i+1*
+also runs while `K_i` is in flight, so its cost is hidden when the kernel is
+long enough. Per-job completion is observed with one
+`cudaEventSynchronize(done_i)` per job; the D2H stream serializes completions,
+so this is O(1) each. Event objects are allocated once per worker (sized to
+the largest batch seen) and reused, so the pipeline does not add per-job event
+churn. The pipeline depth is bounded by the packed batch and by the host
+fill/allocation rate, not by a fixed two-slot ring.
 
 ## The NVML safety margin
 

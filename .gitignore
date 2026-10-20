@@ -30,6 +30,8 @@ results/*
 !results/overlap.csv
 !results/hardware.txt
 !results/scheduler_stress.csv
+!results/saturation/
+!results/saturation/**
 !results/profiling/
 !results/profiling/**
 

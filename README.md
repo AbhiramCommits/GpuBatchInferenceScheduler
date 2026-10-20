@@ -20,7 +20,7 @@ flowchart LR
     D --> S
     S --> Q[(priority queue<br/>mutex + condvar)]
     Q --> PK[memory-budget packer<br/>greedy + wait aging, --max-batch cap]
-    PK --> W["worker threads<br/>(1 copy + 1 compute stream each)"]
+    PK --> W["worker threads<br/>(double-buffered H2D + compute + D2H streams)"]
     W --> KE[GEMM kernels<br/>tiled 32x32 + cuBLAS]
     KE --> GPU[(GPU)]
     NV[NVML telemetry<br/>free memory + utilization] --> PK
@@ -40,7 +40,9 @@ flowchart LR
 GEMM timings are kernel-only medians from 10 warmup + 60 timed runs measured
 with cudaEvents; full data, including end-to-end transfers and percent-of-peak,
 is in `results/benchmark.csv`. Scheduler runs are in
-`results/scheduler_stress.csv`. Profiling numbers are in `docs/PROFILING.md`.
+`results/scheduler_stress.csv`; the saturation sweep is in
+`results/saturation/summary.csv`. Profiling numbers are in
+`docs/PROFILING.md`.
 
 ### Tiled vs cuBLAS
 
@@ -74,9 +76,28 @@ GPU-vs-GPU comparison.
 
 | Workload | Result |
 |---|---|
-| 1000 jobs at 20 jobs/s, 2 workers | **19.36 jobs/s**; p50/p95/p99 **33.6 / 135.8 / 188.9 ms**; 11.7% mean NVML utilization; **0 OOM, 0 failed** |
+| 1000 jobs at 20 jobs/s, 2 workers | **19.36 jobs/s**; p50/p95/p99 **33.6 / 135.8 / 188.9 ms**; 11.7% mean NVML utilization; **0 failed** |
+| 1000 jobs, saturated backlog, 2 workers | **45.35 jobs/s**; p50/p95/p99 **4.32 / 18.36 / 21.38 s**; 24.0% mean NVML utilization; 1000/1000 completed |
 | 6.63× GPU memory queued | 99.5 GiB queued on a 15.0 GiB GPU; 2 oversized jobs rejected cleanly; 998 executed; **0 cudaMalloc failures** |
 | External memory hog | 24/24 jobs completed; 34 transient cudaMalloc failures retried; **0 final OOM** |
+
+The 20 jobs/s point is **arrival-rate-limited**, not the scheduler ceiling:
+the saturation sweep reproduced it at 19.33 jobs/s against 20 offered, with
+only 11.5% mean GPU utilization. `scripts/saturation.sh` runs the same
+workload at 20/100/500 jobs/s and then with `--saturation` (all 1000 jobs
+submitted immediately).
+The saturated run measured **45.35 jobs/s**, about 2.3× the arrival-limited
+number, with 24.0% mean GPU utilization. The 100 jobs/s and 500 jobs/s runs
+both land at ~45.5–46.2 jobs/s (`results/saturation/summary.csv`), so the
+ceiling is real and repeatable.
+
+The existing profile accounts for 5.26 s of GPU kernel+copy activity across
+1000 jobs, which would allow ~190 jobs/s if the GPU were the only limit. The
+measured ceiling of 45.35 jobs/s at 24% GPU utilization says the remaining
+bottleneck is **host-side**, not the priority queue or the GPU: per-batch
+pinned/device buffer allocation and host matrix fill dominate once the
+backlog is deep. The double-buffered transfer path fixes copy/compute
+serialization; pooling the pinned/device buffers is the next optimization.
 
 The 256 MiB margin alone is not what makes this safe under external pressure:
 the scheduler reserves bytes for packed-but-unfinished batches and retries
@@ -93,9 +114,14 @@ once instead of being re-enqueued forever.
 | Other (CPU / gaps) | 16.441 | 1.96 |
 | **Total** | **837.230** | **100.00** |
 
-Transfers are 53.2% of the wall and overlap the kernel for 0% of their time.
-The nsys timeline, the scheduler-side idle-gap analysis, and the proposed
-double-buffered copy fix are in `docs/PROFILING.md`.
+Transfers are 53.2% of the standalone GEMM wall and overlap 0% there because
+`bench_gemm` intentionally uses one stream. The scheduler no longer uses that
+serialized order: each worker issues `H2D_{i+1}` before waiting on `K_i` and
+drains `D2H_i` on a third stream, so transfers can overlap compute. The
+measured overlap benchmark improves from 1.94x/1.54x (old split-stream) to
+**3.36x/1.99x** vs pageable on the 512/1024 shapes. The nsys timeline, the
+scheduler-side idle-gap analysis, and the before/after microbenchmark are in
+`docs/PROFILING.md`.
 
 ## Quickstart
 
@@ -103,6 +129,8 @@ double-buffered copy fix are in `docs/PROFILING.md`.
 # Build and benchmark (CUDA toolkit + CMake >= 3.22)
 cmake -B build && cmake --build build -j
 ./build/bench_gemm --m 1024 --n 1024 --k 1024 --batch 8 --iters 10 --impl cublas
+scripts/saturation.sh                      # 20/100/500 jobs/s + open-loop backlog
+./build/bench_overlap --jobs 20 --reps 5   # includes the double-buffered config
 pip install -e .
 python -c "import numpy as np, gpuinfer; a=np.random.rand(4,512,512).astype('float32'); b=np.random.rand(4,512,512).astype('float32'); print(gpuinfer.batched_gemm(a,b).shape)"
 # Deployment commands below are untested on this host; see deploy/README.md.
@@ -128,7 +156,9 @@ PYTHONPATH=build pytest python/ -q            # pytest suite
 ```
 
 On the T4: **96 GoogleTest cases** (87 kernel correctness + 9 scheduler) and
-**31 pytest tests** passed with no GPU skips. Earlier compute-sanitizer runs
+**31 pytest tests** passed with no GPU skips. After the pipeline change, the
+GPU scheduler test was re-run on the T4 with `max_batch=2` for both tiled and
+cuBLAS and passed. Earlier compute-sanitizer runs
 (memcheck, racecheck, synccheck) reported 0 errors/hazards on `bench_gemm` and
 on `scheduler_daemon --jobs 200`. CI runs the build, clang-format, clang-tidy,
 the CPU-only test subsets, and deploy-manifest lint.
@@ -137,8 +167,15 @@ the CPU-only test subsets, and deploy-manifest lint.
 
 - The tiled kernel gets ~14% of cuBLAS on large squares and 13–27% on skinny
   cases; the 32-wide tile simply wastes lanes when the matrix is thin.
-- Pinned memory did the real work. Splitting streams bought almost nothing
-  because the next H2D sat behind the previous D2H, which waited on the kernel.
+- Pinned memory did the real work. Splitting streams alone bought nothing at
+  first because the next H2D sat behind the previous D2H on the same copy
+  stream. The fix was ordering (issue `H2D_{i+1}` before waiting on `K_i`) and
+  a separate D2H stream, not more streams by themselves. Measured: 3.36x
+  (512 case) and 1.99x (1024 case) vs pageable, up from 1.94x/1.54x for the
+  serialized split-stream version.
+- Arrival-rate benchmarks hide the ceiling. At 20 jobs/s the scheduler looked
+  fine; the saturated run topped out at 45.35 jobs/s with the GPU only 24%
+  utilized, so per-batch buffer allocation and host fill are the real limit.
 - "Zero OOM" only mattered once another process fought for memory; sampling
   NVML and then losing the cudaMalloc race taught me to retry with backoff.
 - Greedy packing really does starve a big job, and aging only worked after I
@@ -156,6 +193,10 @@ the CPU-only test subsets, and deploy-manifest lint.
   per-instance budget discovery via NVML.
 - **Static safety margin**: 256 MiB by default; a future feedback controller
   could adapt it from allocation-failure history.
+- **Buffer pooling**: the saturated run tops out near 45 jobs/s at 24% GPU
+  utilization because pinned/device buffers are still allocated per batch.
+  A per-worker two-slot pool is the next feature; it should raise the ceiling
+  without changing the packing algorithm.
 
 ## Documentation
 

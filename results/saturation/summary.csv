@@ -1,0 +1,5 @@
+mode,offered_rate_jobs_per_s,jobs,workers,max_batch,impl,submitted,completed,failed,wall_s,throughput_jobs_per_s,p50_ms,p95_ms,p99_ms,mean_gpu_utilization_pct
+poisson,20,1000,2,8,tiled,1000,1000,0,51.729,19.331,29.818,120.454,181.276,11.5
+poisson,100,1000,2,8,tiled,1000,1000,0,21.956,45.546,4852.329,10100.304,11566.810,24.8
+poisson,500,1000,2,8,tiled,1000,1000,0,21.656,46.178,7920.244,17160.116,19341.704,24.2
+saturated,0,1000,2,8,tiled,1000,1000,0,22.052,45.348,4319.564,18357.636,21376.414,24.0
